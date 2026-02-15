@@ -1,13 +1,18 @@
 import sys
+import os
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).resolve().parent
-sys.path.append(str(ROOT_DIR))
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(BASE_DIR))
 
 import streamlit as st
 import pandas as pd
-from utils.load_data import load_all
 
+try:
+    from utils.load_data import load_all
+except Exception as e:
+    st.error(f"Import failed: {e}")
+    st.stop()
 
 # =====================================================
 # PAGE CONFIG
