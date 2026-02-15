@@ -3,6 +3,47 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 
+# =====================================================
+# SAFE DATE RANGE HANDLING
+# =====================================================
+
+if assets.index.dtype != "datetime64[ns]":
+    st.error("Index is not datetime. Check CSV structure.")
+    st.stop()
+
+if assets.index.isna().all():
+    st.error("All datetime values are invalid (NaT).")
+    st.stop()
+
+min_date = assets.index.min()
+max_date = assets.index.max()
+
+if pd.isna(min_date) or pd.isna(max_date):
+    st.error("Datetime bounds invalid after parsing.")
+    st.stop()
+
+# Convert to Python date objects explicitly
+min_date_py = min_date.to_pydatetime().date()
+max_date_py = max_date.to_pydatetime().date()
+
+start_date = st.date_input(
+    "Start Date",
+    value=min_date_py,
+    min_value=min_date_py,
+    max_value=max_date_py
+)
+
+end_date = st.date_input(
+    "End Date",
+    value=max_date_py,
+    min_value=min_date_py,
+    max_value=max_date_py
+)
+
+if start_date >= end_date:
+    st.warning("Start date must be earlier than end date.")
+    st.stop()
+
 st.set_page_config(layout="wide")
 st.title("Systemic Contagion & Network Diagnostics")
 
