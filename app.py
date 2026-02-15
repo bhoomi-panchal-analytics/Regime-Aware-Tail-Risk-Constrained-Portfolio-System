@@ -55,6 +55,14 @@ This platform demonstrates a hierarchical capital allocation framework designed 
 
 The system does **not** attempt short-term prediction.  
 It focuses on **risk adaptation and survival across market states**.
+
+1. Macro regime detection (HMM-based)
+2. Regime-dependent volatility estimation (MS-GARCH)
+3. Dynamic contagion monitoring
+4. Tail-risk constrained capital allocation
+5. Governance-first risk hierarchy
+
+The objective is long-term capital survival across structural regime shifts.
 """)
 
 st.markdown("---")
