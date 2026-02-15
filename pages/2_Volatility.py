@@ -195,3 +195,46 @@ st.markdown("""
 
 This is now production-aligned volatility diagnostics.
 """)
+# =====================================================
+# VOLATILITY CLUSTERING (MANUAL REGRESSION)
+# =====================================================
+
+st.subheader("Volatility Clustering Test")
+
+vol = combined[garch_col]
+lag = vol.shift(1)
+
+cluster_df = pd.concat([lag, vol], axis=1).dropna()
+cluster_df.columns = ["Lagged", "Current"]
+
+# Manual OLS using numpy
+x = cluster_df["Lagged"].values
+y = cluster_df["Current"].values
+
+beta = np.cov(x, y)[0, 1] / np.var(x)
+alpha = y.mean() - beta * x.mean()
+
+reg_line = alpha + beta * x
+
+fig_cluster = go.Figure()
+
+fig_cluster.add_trace(go.Scatter(
+    x=x,
+    y=y,
+    mode="markers",
+    name="Observed"
+))
+
+fig_cluster.add_trace(go.Scatter(
+    x=x,
+    y=reg_line,
+    mode="lines",
+    name="OLS Fit"
+))
+
+fig_cluster.update_layout(template="plotly_dark")
+
+st.plotly_chart(fig_cluster, use_container_width=True)
+
+st.metric("Volatility Persistence (β)", f"{beta:.4f}")
+
