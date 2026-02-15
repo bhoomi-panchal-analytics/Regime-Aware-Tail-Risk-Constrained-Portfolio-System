@@ -2,43 +2,36 @@ import pandas as pd
 import os
 
 def load_all():
-
     data = {}
-    base_path = "data"
 
-    if not os.path.exists(base_path):
+    # Attempt unified market file
+    if os.path.exists("data/market_data.csv"):
+        data["market_data"] = pd.read_csv(
+            "data/market_data.csv",
+            index_col=0,
+            parse_dates=True
+        )
         return data
 
-    for file in os.listdir(base_path):
+    # Fallback: try ETF files
+    etf_files = [
+        "SPY.csv", "TLT.csv", "GLD.csv",
+        "DBC.csv", "UUP.csv", "SHY.csv"
+    ]
 
-        if file.endswith(".csv"):
+    frames = []
 
-            try:
-                df = pd.read_csv(os.path.join(base_path, file))
+    for file in etf_files:
+        path = f"data/{file}"
+        if os.path.exists(path):
+            df = pd.read_csv(path, index_col=0, parse_dates=True)
+            df = df.rename(columns={df.columns[0]: file.replace(".csv","")})
+            frames.append(df)
 
-                # Try to detect a date column
-                for col in df.columns:
-                    try:
-                        parsed = pd.to_datetime(df[col])
-                        if parsed.notna().sum() > len(df) * 0.8:
-                            df[col] = parsed
-                            df.set_index(col, inplace=True)
-                            break
-                    except:
-                        continue
-
-                # Ensure datetime index
-                df.index = pd.to_datetime(df.index, errors="coerce")
-
-                # Drop invalid dates
-                df = df[~df.index.isna()]
-
-                # Sort index
-                df = df.sort_index()
-
-                data[file.replace(".csv", "")] = df
-
-            except:
-                continue
+    if frames:
+        merged = pd.concat(frames, axis=1).dropna()
+        data["market_data"] = merged
+    else:
+        data["market_data"] = pd.DataFrame()
 
     return data
