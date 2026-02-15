@@ -9,34 +9,25 @@ st.set_page_config(layout="wide")
 st.title("Contagion Network & Diversification Diagnostics")
 
 # =====================================================
-# LOAD SPECIFIC ETF FILES
+# LOAD MARKET TEMPLATE DATA
 # =====================================================
 
 data = load_all()
 
-required_assets = ["SPY", "TLT", "GLD", "DBC", "UUP", "SHY"]
-
-asset_frames = []
-
-for asset in required_assets:
-    for key in data.keys():
-        if asset in key:
-            df = data[key]
-            df = df.apply(pd.to_numeric, errors="coerce")
-            df = df.dropna()
-            df = df.iloc[:, 0]  # use first column
-            df.name = asset
-            asset_frames.append(df)
-
-if len(asset_frames) < 3:
-    st.error("Not enough ETF market data found. Ensure SPY, TLT, GLD etc are in /data.")
+if "market_data_template" not in data:
+    st.error("market_data_template.csv not found in /data folder.")
     st.stop()
 
-# Merge into one dataframe
-assets = pd.concat(asset_frames, axis=1).dropna()
+assets = data["market_data_template"]
 
-assets.index = pd.to_datetime(assets.index)
+assets = assets.apply(pd.to_numeric, errors="coerce")
+assets.index = pd.to_datetime(assets.index, errors="coerce")
+assets = assets.dropna()
 assets = assets.sort_index()
+
+if assets.shape[1] < 3:
+    st.error("market_data_template must contain at least 3 assets.")
+    st.stop()
 
 # =====================================================
 # DATE FILTER
@@ -59,7 +50,7 @@ assets = assets.loc[
 ]
 
 if len(assets) < 100:
-    st.warning("Not enough data after filtering.")
+    st.warning("Not enough observations after filtering.")
     st.stop()
 
 # =====================================================
@@ -76,6 +67,10 @@ st.subheader("Rolling Contagion Index")
 
 window = st.slider("Rolling Window (days)", 30, 150, 60)
 
+if len(returns) <= window:
+    st.warning("Window too large.")
+    st.stop()
+
 density = []
 
 for i in range(window, len(returns)):
@@ -91,13 +86,13 @@ density_series = pd.Series(
 fig_density = px.line(
     density_series,
     template="plotly_dark",
-    title="Average Absolute Correlation"
+    title="Average Absolute Correlation (Contagion)"
 )
 
 st.plotly_chart(fig_density, use_container_width=True)
 
 # =====================================================
-# CURRENT CORRELATION MATRIX
+# CORRELATION HEATMAP
 # =====================================================
 
 st.subheader("Current Correlation Heatmap")
@@ -151,7 +146,7 @@ div_ratio = weighted_vol / portfolio_vol
 st.metric("Diversification Ratio", f"{div_ratio:.2f}")
 
 # =====================================================
-# EIGENVALUE CONCENTRATION
+# EIGENVALUE SPECTRUM
 # =====================================================
 
 st.subheader("Eigenvalue Spectrum")
@@ -182,20 +177,23 @@ fig_hist = px.histogram(
     upper_vals,
     nbins=30,
     template="plotly_dark",
-    title="Distribution of Pairwise Correlations"
+    title="Pairwise Correlation Distribution"
 )
 
 st.plotly_chart(fig_hist, use_container_width=True)
 
 # =====================================================
-# REGIME
+# REGIME CLASSIFICATION
 # =====================================================
 
 current_density = density_series.iloc[-1]
 
-if current_density > density_series.quantile(0.75):
+low = density_series.quantile(0.25)
+high = density_series.quantile(0.75)
+
+if current_density > high:
     regime = "High Contagion"
-elif current_density < density_series.quantile(0.25):
+elif current_density < low:
     regime = "Low Contagion"
 else:
     regime = "Medium Contagion"
