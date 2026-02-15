@@ -2,15 +2,18 @@ import streamlit as st
 import plotly.express as px
 import pandas as pd
 from utils.load_data import load_all
+data = load_all()
+regime_probs = data["regime_probs"]
+
+if regime_probs.empty:
+    st.warning("Regime probabilities file missing.")
+    st.stop()
 
 
 st.title("Macro Regime Probability Heatmap")
 
-data = load_all()
+
 macro = data["macro"]
-
-regime_probs = data["regime_probs"]
-
 
 fig = px.imshow(
     macro.corr(),
