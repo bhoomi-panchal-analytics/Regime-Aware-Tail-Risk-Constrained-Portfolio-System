@@ -10,19 +10,25 @@ if regime_probs.empty:
     st.stop()
 
 
-st.title("Macro Regime Probability Heatmap")
+import plotly.express as px
 
-
-macro = data["macro"]
+if regime_probs.empty:
+    st.warning("Regime data empty.")
+    st.stop()
 
 fig = px.imshow(
-    macro.corr(),
+    regime_probs.T.values,
     aspect="auto",
     color_continuous_scale="RdBu_r"
 )
 
+fig.update_layout(
+    xaxis_title="Time",
+    yaxis_title="Regime"
+)
 
 st.plotly_chart(fig, use_container_width=True)
+
 
 st.markdown("### Crisis Highlights")
 
@@ -34,4 +40,6 @@ crises = {
 }
 
 for name, (start, end) in crises.items():
-    st.write(f"{name}: {start} to {end}")
+    st.write("Data shape:", regime_probs.shape)
+    st.write(regime_probs.head())
+
