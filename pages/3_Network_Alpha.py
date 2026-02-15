@@ -7,56 +7,64 @@ import networkx as nx
 from utils.load_data import load_all
 
 st.set_page_config(layout="wide")
-st.title("Contagion Network & Systemic Risk Analytics")
-
-# ==========================
-# Load Data
-# ==========================
+st.title("Contagion & Systemic Risk Network")
 
 data = load_all()
-assets = data.get("market_data", pd.DataFrame())
 
-if assets.empty:
-    st.error("Market data missing.")
+# --------------------------
+# AUTO-DETECT PRICE DATASET
+# --------------------------
+
+assets = None
+max_cols = 0
+
+for key in data:
+    df = data[key]
+    if isinstance(df, pd.DataFrame) and df.shape[1] > max_cols:
+        assets = df
+        max_cols = df.shape[1]
+
+if assets is None:
+    st.error("No suitable price dataset found in /data folder.")
     st.stop()
 
 assets = assets.apply(pd.to_numeric, errors="coerce").dropna()
-returns = assets.pct_change().dropna()
 
-# ==========================
-# Timeline Selection
-# ==========================
+# --------------------------
+# Timeline
+# --------------------------
 
-start_date = st.date_input("Start Date", returns.index.min())
-end_date = st.date_input("End Date", returns.index.max())
+start_date = st.date_input("Start Date", assets.index.min())
+end_date = st.date_input("End Date", assets.index.max())
 
-returns = returns.loc[
-    (returns.index >= pd.to_datetime(start_date)) &
-    (returns.index <= pd.to_datetime(end_date))
+assets = assets.loc[
+    (assets.index >= pd.to_datetime(start_date)) &
+    (assets.index <= pd.to_datetime(end_date))
 ]
 
-if returns.empty:
-    st.warning("No data in selected range.")
+if assets.empty:
+    st.warning("No data in selected period.")
     st.stop()
 
-# ==========================
-# Rolling Correlation
-# ==========================
+returns = assets.pct_change().dropna()
+
+# --------------------------
+# Rolling Window
+# --------------------------
 
 window = st.slider("Rolling Window (days)", 30, 252, 60)
+threshold = st.slider("Correlation Threshold", 0.3, 0.9, 0.6)
 
-rolling_corr = returns.rolling(window).corr()
-
-# ==========================
-# Average Correlation Over Time
-# ==========================
+# --------------------------
+# Average Correlation
+# --------------------------
 
 avg_corr_series = []
 
-for date in returns.index[window:]:
-    corr_matrix = returns.loc[:date].tail(window).corr()
-    upper_tri = corr_matrix.values[np.triu_indices_from(corr_matrix, k=1)]
-    avg_corr_series.append(np.mean(upper_tri))
+for i in range(window, len(returns)):
+    corr_matrix = returns.iloc[i-window:i].corr()
+    upper = corr_matrix.values[np.triu_indices_from(corr_matrix, 1)]
+    avg_corr_series.append(np.mean(upper))
 
 avg_corr = pd.Series(avg_corr_series, index=returns.index[window:])
 
@@ -65,74 +73,67 @@ st.subheader("Average Pairwise Correlation")
 fig_avg = px.line(avg_corr, template="plotly_dark")
 st.plotly_chart(fig_avg, use_container_width=True)
 
-# ==========================
-# Network Density Over Time
-# ==========================
+# --------------------------
+# Network Density
+# --------------------------
 
 density_series = []
 
-threshold = st.slider("Correlation Threshold", 0.3, 0.9, 0.6)
-
-for date in returns.index[window:]:
-    corr_matrix = returns.loc[:date].tail(window).corr()
+for i in range(window, len(returns)):
+    corr_matrix = returns.iloc[i-window:i].corr()
     G = nx.Graph()
 
-    for i in corr_matrix.columns:
-        for j in corr_matrix.columns:
-            if i != j and abs(corr_matrix.loc[i, j]) > threshold:
-                G.add_edge(i, j)
+    for a in corr_matrix.columns:
+        for b in corr_matrix.columns:
+            if a != b and abs(corr_matrix.loc[a, b]) > threshold:
+                G.add_edge(a, b)
 
     density_series.append(nx.density(G))
 
 density = pd.Series(density_series, index=returns.index[window:])
 
 st.subheader("Network Density (Contagion Intensity)")
-
 fig_density = px.line(density, template="plotly_dark")
 st.plotly_chart(fig_density, use_container_width=True)
 
-# ==========================
-# Snapshot Network Graph
-# ==========================
+# --------------------------
+# Snapshot Selector
+# --------------------------
 
 st.subheader("Network Snapshot")
 
-selected_date = st.selectbox(
-    "Select Date for Network Snapshot",
+snapshot_date = st.selectbox(
+    "Select Snapshot Date",
     options=list(returns.index[window:])
 )
 
-corr_snapshot = returns.loc[:selected_date].tail(window).corr()
+corr_snapshot = returns.loc[:snapshot_date].tail(window).corr()
 
 G = nx.Graph()
 
-for i in corr_snapshot.columns:
-    for j in corr_snapshot.columns:
-        if i != j and abs(corr_snapshot.loc[i, j]) > threshold:
-            G.add_edge(i, j, weight=corr_snapshot.loc[i, j])
+for a in corr_snapshot.columns:
+    for b in corr_snapshot.columns:
+        if a != b and abs(corr_snapshot.loc[a, b]) > threshold:
+            G.add_edge(a, b)
 
 pos = nx.spring_layout(G, seed=42)
 
-edge_x = []
-edge_y = []
-
+edge_x, edge_y = [], []
 for edge in G.edges():
     x0, y0 = pos[edge[0]]
     x1, y1 = pos[edge[1]]
-    edge_x.extend([x0, x1, None])
-    edge_y.extend([y0, y1, None])
+    edge_x += [x0, x1, None]
+    edge_y += [y0, y1, None]
 
-node_x = []
-node_y = []
-
+node_x, node_y = [], []
 for node in G.nodes():
     x, y = pos[node]
     node_x.append(x)
     node_y.append(y)
 
-fig_network = go.Figure()
+fig_net = go.Figure()
 
-fig_network.add_trace(go.Scatter(
+fig_net.add_trace(go.Scatter(
     x=edge_x,
     y=edge_y,
     line=dict(width=1),
@@ -140,7 +141,7 @@ fig_network.add_trace(go.Scatter(
     showlegend=False
 ))
 
-fig_network.add_trace(go.Scatter(
+fig_net.add_trace(go.Scatter(
     x=node_x,
     y=node_y,
     mode='markers+text',
@@ -150,64 +151,51 @@ fig_network.add_trace(go.Scatter(
     showlegend=False
 ))
 
-fig_network.update_layout(template="plotly_dark")
-st.plotly_chart(fig_network, use_container_width=True)
+fig_net.update_layout(template="plotly_dark")
+st.plotly_chart(fig_net, use_container_width=True)
 
-# ==========================
-# Centrality Ranking
-# ==========================
+# --------------------------
+# Centrality
+# --------------------------
 
 st.subheader("Eigenvector Centrality")
 
-centrality = nx.eigenvector_centrality_numpy(G)
-centrality_df = pd.DataFrame.from_dict(centrality, orient='index', columns=['Centrality'])
-centrality_df = centrality_df.sort_values("Centrality", ascending=False)
+if len(G.nodes) > 0:
+    centrality = nx.eigenvector_centrality_numpy(G)
+    centrality_df = pd.DataFrame.from_dict(
+        centrality,
+        orient='index',
+        columns=["Centrality"]
+    ).sort_values("Centrality", ascending=False)
 
-fig_cent = px.bar(
-    centrality_df,
-    y="Centrality",
-    template="plotly_dark"
-)
-st.plotly_chart(fig_cent, use_container_width=True)
+    fig_cent = px.bar(centrality_df, y="Centrality", template="plotly_dark")
+    st.plotly_chart(fig_cent, use_container_width=True)
 
-# ==========================
-# Degree Distribution
-# ==========================
+    st.metric("Systemic Concentration Risk",
+              f"{centrality_df['Centrality'].max():.4f}")
+else:
+    st.info("No edges above threshold.")
 
-st.subheader("Degree Distribution")
+# --------------------------
+# Heatmap
+# --------------------------
 
-degrees = [val for (node, val) in G.degree()]
-fig_deg = px.histogram(degrees, nbins=10, template="plotly_dark")
-st.plotly_chart(fig_deg, use_container_width=True)
-
-# ==========================
-# Correlation Heatmap Snapshot
-# ==========================
-
-st.subheader("Correlation Heatmap (Snapshot)")
+st.subheader("Correlation Heatmap")
 
 fig_heat = px.imshow(
     corr_snapshot,
-    color_continuous_scale="RdBu",
-    template="plotly_dark"
+    template="plotly_dark",
+    color_continuous_scale="RdBu"
 )
+
 st.plotly_chart(fig_heat, use_container_width=True)
 
-# ==========================
-# Concentration Risk Metric
-# ==========================
-
-concentration = centrality_df["Centrality"].max()
-
-st.subheader("Systemic Concentration Risk")
-st.metric("Max Centrality", f"{concentration:.4f}")
-
 st.markdown("""
-### Systemic Risk Interpretation
+### Interpretation
 
-• Rising average correlation indicates diversification breakdown  
+• Rising average correlation signals diversification breakdown  
 • Network density measures contagion tightening  
-• Centrality ranking identifies dominant systemic nodes  
-• High concentration suggests fragility  
-• Threshold control allows stress sensitivity adjustment  
+• Centrality identifies systemic dominant assets  
+• Threshold slider controls stress sensitivity  
+• Timeline selector allows crisis inspection  
 """)
