@@ -17,83 +17,68 @@ if "market_data_template" not in data:
     st.error("market_data_template.csv not found.")
     st.stop()
 
-raw_df = data["market_data_template"].copy()
+df = data["market_data_template"].copy()
 
 # =====================================================
-# FORCE FIRST COLUMN AS DATETIME INDEX
+# ENSURE DATE INDEX
 # =====================================================
 
-df = raw_df.reset_index()
+if "Date" in df.columns:
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df = df.dropna(subset=["Date"])
+    df = df.set_index("Date")
+else:
+    df = df.reset_index()
+    df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0], errors="coerce")
+    df = df.dropna(subset=[df.columns[0]])
+    df = df.set_index(df.columns[0])
 
-date_col = df.columns[0]
-df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-
-df = df.dropna(subset=[date_col])
-
-if df.empty:
-    st.error("No valid datetime values found in dataset.")
-    st.stop()
-
-df = df.set_index(date_col)
 df = df.sort_index()
 
-# Keep numeric columns
-df = df.apply(pd.to_numeric, errors="coerce")
-df = df.dropna(how="all")
-
-if df.shape[1] < 3:
-    st.error("Need at least 3 numeric asset columns.")
+if df.empty:
+    st.error("No valid datetime values found.")
     st.stop()
+
+# =====================================================
+# HANDLE NULL RETURNS
+# =====================================================
+
+numeric_cols = df.columns
+
+df = df.apply(pd.to_numeric, errors="coerce")
+
+null_ratio = df.isna().mean().mean()
+
+if null_ratio > 0.8:
+    st.warning("Most values are missing. Replacing None with 0 for demonstration.")
+    df = df.fillna(0)
+else:
+    df = df.fillna(method="ffill").fillna(0)
 
 assets = df.copy()
-
-# =====================================================
-# INDEX-BASED RANGE SLIDER (NO DATETIME INPUT)
-# =====================================================
-
-# =====================================================
-# ENSURE DATA NOT EMPTY BEFORE SLIDER
-# =====================================================
-
-if assets.empty:
-    st.error("Asset dataset is empty after preprocessing.")
-    st.write("Columns:", raw_df.columns)
-    st.write("First rows:")
-    st.write(raw_df.head())
-    st.stop()
-
-if len(assets.index) < 2:
-    st.error("Not enough datetime observations for analysis.")
-    st.stop()
 
 # =====================================================
 # SAFE RANGE SELECTION
 # =====================================================
 
-st.subheader("Select Analysis Window")
+if len(assets) < 120:
+    st.warning("Limited observations available.")
 
 index_list = assets.index.to_list()
 
-start_default = index_list[0]
-end_default = index_list[-1]
+if len(index_list) < 2:
+    st.error("Not enough data points.")
+    st.stop()
 
 date_range = st.select_slider(
     "Date Range",
     options=index_list,
-    value=(start_default, end_default)
+    value=(index_list[0], index_list[-1])
 )
 
 filtered = assets.loc[date_range[0]:date_range[1]]
 
-if filtered.empty:
-    st.error("Filtered dataset empty.")
-    st.stop()
-
-# =====================================================
-# RETURNS
-# =====================================================
-
-returns = filtered.pct_change().dropna()
+returns = filtered.copy()
 
 # =====================================================
 # ROLLING CONTAGION INDEX
@@ -128,7 +113,7 @@ fig_density = px.line(
 st.plotly_chart(fig_density, use_container_width=True)
 
 # =====================================================
-# CORRELATION HEATMAP
+# CURRENT CORRELATION HEATMAP
 # =====================================================
 
 st.subheader("Current Correlation Matrix")
@@ -147,7 +132,7 @@ fig_heat.update_layout(template="plotly_dark")
 st.plotly_chart(fig_heat, use_container_width=True)
 
 # =====================================================
-# CENTRALITY
+# SYSTEMIC CENTRALITY
 # =====================================================
 
 st.subheader("Systemic Centrality")
@@ -202,7 +187,7 @@ try:
     st.metric("Systemic Concentration Ratio", f"{concentration:.2f}")
 
 except:
-    st.warning("Eigenvalue computation unstable.")
+    st.warning("Eigenvalue calculation unstable.")
 
 # =====================================================
 # CORRELATION DISTRIBUTION
@@ -222,7 +207,7 @@ fig_hist = px.histogram(
 st.plotly_chart(fig_hist, use_container_width=True)
 
 # =====================================================
-# CONTAGION REGIME
+# CONTAGION REGIME CLASSIFICATION
 # =====================================================
 
 current_density = density_series.iloc[-1]
@@ -242,9 +227,9 @@ st.metric("Current Contagion Regime", regime)
 st.markdown("""
 ### Interpretation
 
-• Rising contagion index → tightening correlations  
+• Rising contagion → correlation compression  
 • Large eigenvalue concentration → systemic dominance  
-• Falling diversification ratio → fragile allocation  
+• Low diversification ratio → fragile allocation  
 
-Contagion precedes volatility expansion.
+High contagion often precedes drawdowns.
 """)
