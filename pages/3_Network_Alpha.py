@@ -14,85 +14,55 @@ from utils.load_data import load_all
 data = load_all()
 
 if "market_data_template" not in data:
-    st.error("market_data_template.csv not found in /data.")
+    st.error("market_data_template.csv not found.")
     st.stop()
 
 raw_df = data["market_data_template"].copy()
 
 # =====================================================
-# STRICT DATETIME PARSING
+# FORCE FIRST COLUMN AS DATETIME INDEX
 # =====================================================
 
-df = raw_df.copy().reset_index()
+df = raw_df.reset_index()
 
-# Try first column as datetime
 date_col = df.columns[0]
 df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
 
-# If too many invalid dates, stop
-valid_ratio = df[date_col].notna().mean()
+df = df.dropna(subset=[date_col])
 
-if valid_ratio < 0.7:
-    st.error("First column does not contain valid datetime values.")
+if df.empty:
+    st.error("No valid datetime values found in dataset.")
     st.stop()
 
-df = df.dropna(subset=[date_col])
 df = df.set_index(date_col)
 df = df.sort_index()
 
-# Keep numeric asset columns only
+# Keep numeric columns
 df = df.apply(pd.to_numeric, errors="coerce")
 df = df.dropna(how="all")
 
 if df.shape[1] < 3:
-    st.error("At least 3 numeric asset columns required.")
+    st.error("Need at least 3 numeric asset columns.")
     st.stop()
 
 assets = df.copy()
 
 # =====================================================
-# SAFE DATE RANGE FILTER
+# INDEX-BASED RANGE SLIDER (NO DATETIME INPUT)
 # =====================================================
 
-min_date = assets.index.min()
-max_date = assets.index.max()
+st.subheader("Select Analysis Window")
 
-if pd.isna(min_date) or pd.isna(max_date):
-    st.error("Datetime bounds invalid.")
-    st.stop()
+date_range = st.select_slider(
+    "Date Range",
+    options=assets.index,
+    value=(assets.index[0], assets.index[-1])
+)
 
-min_date_py = min_date.to_pydatetime().date()
-max_date_py = max_date.to_pydatetime().date()
-
-col1, col2 = st.columns(2)
-
-with col1:
-    start_date = st.date_input(
-        "Start Date",
-        value=min_date_py,
-        min_value=min_date_py,
-        max_value=max_date_py
-    )
-
-with col2:
-    end_date = st.date_input(
-        "End Date",
-        value=max_date_py,
-        min_value=min_date_py,
-        max_value=max_date_py
-    )
-
-if start_date >= end_date:
-    st.warning("Start date must be before end date.")
-    st.stop()
-
-filtered = assets.loc[
-    (assets.index >= pd.to_datetime(start_date)) &
-    (assets.index <= pd.to_datetime(end_date))
-]
+filtered = assets.loc[date_range[0]:date_range[1]]
 
 if len(filtered) < 120:
-    st.warning("Not enough data in selected range.")
+    st.warning("Not enough data in selected window.")
     st.stop()
 
 # =====================================================
@@ -110,7 +80,7 @@ st.subheader("Rolling Contagion Index")
 window = st.slider("Rolling Window (days)", 30, 150, 60)
 
 if len(returns) <= window:
-    st.warning("Rolling window too large for selected range.")
+    st.warning("Window too large.")
     st.stop()
 
 density = []
@@ -128,13 +98,13 @@ density_series = pd.Series(
 fig_density = px.line(
     density_series,
     template="plotly_dark",
-    title="Average Absolute Correlation (Systemic Contagion)"
+    title="Average Absolute Correlation (Contagion Index)"
 )
 
 st.plotly_chart(fig_density, use_container_width=True)
 
 # =====================================================
-# CURRENT CORRELATION HEATMAP
+# CORRELATION HEATMAP
 # =====================================================
 
 st.subheader("Current Correlation Matrix")
@@ -208,7 +178,7 @@ try:
     st.metric("Systemic Concentration Ratio", f"{concentration:.2f}")
 
 except:
-    st.warning("Eigenvalue calculation unstable.")
+    st.warning("Eigenvalue computation unstable.")
 
 # =====================================================
 # CORRELATION DISTRIBUTION
@@ -252,5 +222,5 @@ st.markdown("""
 • Large eigenvalue concentration → systemic dominance  
 • Falling diversification ratio → fragile allocation  
 
-Contagion precedes drawdowns.
+Contagion precedes volatility expansion.
 """)
