@@ -4,7 +4,7 @@ import numpy as np
 import plotly.express as px
 
 st.set_page_config(layout="wide")
-st.title("Systemic Contagion & Network Diagnostics")
+st.title("Simple Contagion & Correlation Analysis")
 
 # =========================
 # LOAD DATA
@@ -20,145 +20,77 @@ if "market_data_template" not in data:
 df = data["market_data_template"].copy()
 
 # =========================
-# BASIC CLEANING
+# CLEAN DATA
 # =========================
 
-# If Date column exists, use it
+# Use Date column if present
 if "Date" in df.columns:
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df = df.dropna(subset=["Date"])
     df = df.set_index("Date")
 
-df.index = pd.to_datetime(df.index, errors="coerce")
-df = df.dropna()
-
-# Convert all columns to numeric
+# Convert everything numeric
 df = df.apply(pd.to_numeric, errors="coerce")
 
-# Keep only columns with actual variation
-valid_cols = []
-for col in df.columns:
-    if df[col].notna().sum() > 20 and df[col].std() > 0:
-        valid_cols.append(col)
+# Drop columns that are all empty
+df = df.dropna(axis=1, how="all")
 
-df = df[valid_cols]
-
-if df.shape[1] < 2:
-    st.error("Not enough valid asset columns after cleaning.")
-    st.stop()
-
-# Fill missing safely
+# Fill remaining missing with 0
 df = df.fillna(0)
 
-st.success("Data ready for network diagnostics.")
+if df.shape[1] < 2:
+    st.error("Not enough asset columns available.")
+    st.stop()
+
+st.success("Data loaded successfully.")
 
 # =========================
 # CORRELATION MATRIX
 # =========================
 
-st.subheader("1. Correlation Heatmap")
+st.subheader("Correlation Heatmap")
 
-corr_matrix = df.corr()
+corr = df.corr()
 
-fig1 = px.imshow(
-    corr_matrix,
+fig = px.imshow(
+    corr,
     zmin=-1,
     zmax=1,
     color_continuous_scale="RdBu",
+    template="plotly_dark"
 )
 
-fig1.update_layout(template="plotly_dark")
-st.plotly_chart(fig1, use_container_width=True)
+st.plotly_chart(fig, use_container_width=True)
 
 # =========================
-# CONTAGION INDEX
+# AVERAGE CORRELATION
 # =========================
 
-st.subheader("2. Contagion Index (Average Absolute Correlation)")
+upper = corr.values[np.triu_indices_from(corr, k=1)]
+avg_corr = np.mean(np.abs(upper))
 
-upper_vals = corr_matrix.values[np.triu_indices_from(corr_matrix, k=1)]
-contagion = np.mean(np.abs(upper_vals))
-
-st.metric("Contagion Level", round(contagion, 3))
+st.subheader("Average Absolute Correlation")
+st.metric("Contagion Level", round(avg_corr, 3))
 
 # =========================
-# CORRELATION DISTRIBUTION
+# BAR CHART OF CORRELATION STRENGTH
 # =========================
 
-st.subheader("3. Correlation Distribution")
+st.subheader("Average Correlation per Asset")
 
-fig2 = px.histogram(
-    upper_vals,
-    nbins=30,
-    template="plotly_dark",
-    title="Pairwise Correlation Distribution"
+asset_corr = corr.abs().mean().sort_values(ascending=False)
+
+fig2 = px.bar(
+    asset_corr,
+    template="plotly_dark"
 )
 
 st.plotly_chart(fig2, use_container_width=True)
 
-# =========================
-# SYSTEMIC CENTRALITY
-# =========================
-
-st.subheader("4. Systemic Centrality")
-
-centrality = corr_matrix.abs().mean().sort_values(ascending=False)
-
-fig3 = px.bar(
-    centrality,
-    template="plotly_dark",
-    title="Average Absolute Correlation per Asset"
-)
-
-st.plotly_chart(fig3, use_container_width=True)
-
-# =========================
-# EIGENVALUE SPECTRUM
-# =========================
-
-st.subheader("5. Eigenvalue Spectrum")
-
-try:
-    eigvals = np.linalg.eigvals(corr_matrix.values)
-    eigvals = np.real(eigvals)
-
-    fig4 = px.bar(
-        eigvals,
-        template="plotly_dark",
-        title="Eigenvalue Magnitudes"
-    )
-
-    st.plotly_chart(fig4, use_container_width=True)
-
-    systemic_share = eigvals.max() / eigvals.sum()
-    st.metric("Systemic Concentration", round(systemic_share, 3))
-
-except:
-    st.warning("Eigenvalue decomposition unstable.")
-
-# =========================
-# DIVERSIFICATION RATIO
-# =========================
-
-st.subheader("6. Diversification Ratio")
-
-vol = df.std()
-cov = df.cov()
-
-weights = np.ones(len(vol)) / len(vol)
-
-portfolio_vol = np.sqrt(weights @ cov.values @ weights)
-weighted_vol = weights @ vol.values
-
-div_ratio = weighted_vol / portfolio_vol if portfolio_vol > 0 else 0
-
-st.metric("Diversification Ratio", round(div_ratio, 3))
-
 st.markdown("""
-### Interpretation
+### What This Means
 
-• High contagion → diversification breakdown  
-• Large first eigenvalue → dominant systemic factor  
-• Diversification ratio close to 1 → assets moving together  
-• Wide correlation distribution → heterogeneous structure  
+• High average correlation → diversification weak  
+• Low correlation → portfolio more resilient  
+• Assets with highest average correlation → systemic drivers  
 """)
