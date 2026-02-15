@@ -1,109 +1,126 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
+import plotly.express as px
 from utils.load_data import load_all
 
 st.set_page_config(layout="wide")
-st.title("Macro Regime Probability Heatmap")
-
-# ===============================
-# LOAD DATA
-# ===============================
+st.title("Advanced Macro Regime Diagnostics")
 
 data = load_all()
 regime_probs = data["regime_probs"]
 
 if regime_probs.empty:
-    st.error("Regime probabilities file missing or empty.")
+    st.error("Regime probabilities missing.")
     st.stop()
 
-# Ensure numeric values
-regime_probs = regime_probs.apply(pd.to_numeric, errors="coerce")
+regime_probs = regime_probs.apply(pd.to_numeric, errors="coerce").dropna()
 
-# Drop completely empty rows
-regime_probs = regime_probs.dropna(how="all")
+# ==========================
+# Timeline selector
+# ==========================
 
-if regime_probs.shape[0] == 0:
-    st.error("Regime file exists but contains no usable data.")
-    st.stop()
+start_date = st.date_input("Start Date", regime_probs.index.min())
+end_date = st.date_input("End Date", regime_probs.index.max())
 
-st.markdown(f"**Data Range:** {regime_probs.index.min().date()} → {regime_probs.index.max().date()}")
-st.markdown(f"**Shape:** {regime_probs.shape[0]} observations × {regime_probs.shape[1]} regimes")
+mask = (regime_probs.index >= pd.to_datetime(start_date)) & \
+       (regime_probs.index <= pd.to_datetime(end_date))
 
-# ===============================
-# BUILD HEATMAP
-# ===============================
+regime_filtered = regime_probs.loc[mask]
 
-fig = go.Figure()
+# ==========================
+# Heatmap
+# ==========================
 
-fig.add_trace(
+st.subheader("Regime Probability Heatmap")
+
+fig_heat = go.Figure(
     go.Heatmap(
-        z=regime_probs.T.values,
-        x=regime_probs.index,
-        y=regime_probs.columns,
+        z=regime_filtered.T.values,
+        x=regime_filtered.index,
+        y=regime_filtered.columns,
         colorscale="RdBu_r",
         zmin=0,
         zmax=1,
-        colorbar=dict(title="Probability"),
-        hovertemplate=
-        "Date: %{x}<br>" +
-        "Regime: %{y}<br>" +
-        "Probability: %{z:.3f}<extra></extra>"
+        colorbar=dict(title="Probability")
     )
 )
 
-# ===============================
-# ADD CRISIS SHADING
-# ===============================
+fig_heat.update_layout(height=500, template="plotly_dark")
 
-def add_crisis_shading(fig, start, end, label, color):
-    fig.add_vrect(
-        x0=start,
-        x1=end,
-        fillcolor=color,
-        opacity=0.2,
-        line_width=0,
-        annotation_text=label,
-        annotation_position="top left"
-    )
+st.plotly_chart(fig_heat, use_container_width=True)
 
-# 2008 Global Financial Crisis
-add_crisis_shading(fig, "2008-01-01", "2009-06-01", "2008 GFC", "red")
+# ==========================
+# Dominant Regime Over Time
+# ==========================
 
-# 2012 Euro Stress
-add_crisis_shading(fig, "2012-01-01", "2012-12-31", "2012 Euro Crisis", "orange")
+st.subheader("Dominant Regime Path")
 
-# 2017 Calm Growth
-add_crisis_shading(fig, "2017-01-01", "2017-12-31", "2017 Calm Expansion", "green")
+dominant = regime_filtered.idxmax(axis=1)
 
-# 2020 COVID Shock
-add_crisis_shading(fig, "2020-02-01", "2020-06-30", "2020 COVID Shock", "purple")
-
-# ===============================
-# LAYOUT STYLING
-# ===============================
-
-fig.update_layout(
-    title="Latent Macro Regime Probability Structure (HMM Output)",
-    xaxis_title="Time",
-    yaxis_title="Regime State",
-    xaxis=dict(showgrid=False),
-    yaxis=dict(showgrid=False),
-    template="plotly_dark",
-    height=600
+fig_dom = px.line(
+    x=regime_filtered.index,
+    y=dominant.astype("category").cat.codes,
+    labels={"x": "Date", "y": "Regime State"},
 )
 
-st.plotly_chart(fig, use_container_width=True)
+fig_dom.update_layout(template="plotly_dark")
+st.plotly_chart(fig_dom, use_container_width=True)
 
-# ===============================
-# ADD INTERPRETATION BLOCK
-# ===============================
+# ==========================
+# Regime Persistence
+# ==========================
 
-st.markdown("### Interpretation")
+st.subheader("Regime Persistence Duration")
+
+durations = dominant.groupby((dominant != dominant.shift()).cumsum()).agg(['first','size'])
+fig_persist = px.bar(
+    durations,
+    y="size",
+    title="Regime Duration Blocks"
+)
+
+fig_persist.update_layout(template="plotly_dark")
+st.plotly_chart(fig_persist, use_container_width=True)
+
+# ==========================
+# Transition Matrix
+# ==========================
+
+st.subheader("Estimated Transition Matrix")
+
+states = dominant.astype("category").cat.codes
+trans_matrix = pd.crosstab(states[:-1], states[1:], normalize="index")
+
+fig_trans = px.imshow(trans_matrix,
+                      color_continuous_scale="Blues",
+                      title="Regime Transition Probabilities")
+
+fig_trans.update_layout(template="plotly_dark")
+st.plotly_chart(fig_trans, use_container_width=True)
+
+# ==========================
+# Regime Entropy
+# ==========================
+
+st.subheader("Rolling Regime Uncertainty (Entropy)")
+
+entropy = -(regime_filtered * np.log(regime_filtered + 1e-9)).sum(axis=1)
+
+fig_entropy = px.line(
+    entropy,
+    title="Regime Probability Entropy"
+)
+
+fig_entropy.update_layout(template="plotly_dark")
+st.plotly_chart(fig_entropy, use_container_width=True)
 
 st.markdown("""
-- Deep red bands during **2008 and 2020** should show dominance of crisis regime.
-- 2017 should display stable dominance of growth regime.
-- Regime transitions should appear as horizontal probability shifts.
-- Persistent blocks validate HMM regime stickiness.
+### Interpretation
+
+- Heatmap shows regime dominance and persistence.
+- Transition matrix quantifies regime switching intensity.
+- Entropy indicates uncertainty — spikes imply regime ambiguity.
+- Long duration blocks indicate structural regime persistence.
 """)
