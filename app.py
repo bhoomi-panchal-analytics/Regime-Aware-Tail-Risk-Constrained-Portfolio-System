@@ -8,6 +8,15 @@ st.set_page_config(
 )
 
 st.title("Regime-Aware Tail-Risk Constrained Portfolio System")
+st.sidebar.subheader("Investor Profile")
+
+name = st.sidebar.text_input("Name")
+age = st.sidebar.number_input("Age", 18, 80)
+capital = st.sidebar.number_input("Capital Available", min_value=1000.0)
+risk_threshold = st.sidebar.slider("Risk Tolerance (0-1)", 0.0, 1.0, 0.5)
+investment_horizon = st.sidebar.selectbox("Investment Horizon",
+                                           ["Short Term", "Medium Term", "Long Term"])
+
 
 # ======================================
 # LOAD DATA
