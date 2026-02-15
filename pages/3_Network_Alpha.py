@@ -51,18 +51,42 @@ assets = df.copy()
 # INDEX-BASED RANGE SLIDER (NO DATETIME INPUT)
 # =====================================================
 
+# =====================================================
+# ENSURE DATA NOT EMPTY BEFORE SLIDER
+# =====================================================
+
+if assets.empty:
+    st.error("Asset dataset is empty after preprocessing.")
+    st.write("Columns:", raw_df.columns)
+    st.write("First rows:")
+    st.write(raw_df.head())
+    st.stop()
+
+if len(assets.index) < 2:
+    st.error("Not enough datetime observations for analysis.")
+    st.stop()
+
+# =====================================================
+# SAFE RANGE SELECTION
+# =====================================================
+
 st.subheader("Select Analysis Window")
+
+index_list = assets.index.to_list()
+
+start_default = index_list[0]
+end_default = index_list[-1]
 
 date_range = st.select_slider(
     "Date Range",
-    options=assets.index,
-    value=(assets.index[0], assets.index[-1])
+    options=index_list,
+    value=(start_default, end_default)
 )
 
 filtered = assets.loc[date_range[0]:date_range[1]]
 
-if len(filtered) < 120:
-    st.warning("Not enough data in selected window.")
+if filtered.empty:
+    st.error("Filtered dataset empty.")
     st.stop()
 
 # =====================================================
