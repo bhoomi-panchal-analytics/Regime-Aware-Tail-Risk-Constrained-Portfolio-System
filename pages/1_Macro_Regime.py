@@ -31,7 +31,7 @@ if pd.isna(min_date) or pd.isna(max_date):
 start_date = st.date_input("Start Date", min_date.date())
 end_date = st.date_input("End Date", max_date.date())
 
-end_date = st.date_input("End Date", regime_probs.index.max())
+
 
 mask = (regime_probs.index >= pd.to_datetime(start_date)) & \
        (regime_probs.index <= pd.to_datetime(end_date))
