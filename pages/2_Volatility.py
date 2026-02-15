@@ -41,7 +41,16 @@ vix_col = combined.columns[1]
 # Timeline Selector
 # --------------------------
 
-start_date = st.date_input("Start Date", combined.index.min())
+min_date = assets.index.min()
+max_date = assets.index.max()
+
+if pd.isna(min_date) or pd.isna(max_date):
+    st.error("Invalid date index.")
+    st.stop()
+
+start_date = st.date_input("Start Date", min_date.date())
+end_date = st.date_input("End Date", max_date.date())
+
 end_date = st.date_input("End Date", combined.index.max())
 
 combined = combined.loc[
