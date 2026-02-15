@@ -2,13 +2,14 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 
 st.set_page_config(layout="wide")
 st.title("Systemic Contagion & Network Diagnostics")
 
-# =====================================================
+# ======================================================
 # LOAD DATA
-# =====================================================
+# ======================================================
 
 from utils.load_data import load_all
 data = load_all()
@@ -19,108 +20,96 @@ if "market_data_template" not in data:
 
 df = data["market_data_template"].copy()
 
-# =====================================================
-# ENSURE DATE INDEX
-# =====================================================
+# ======================================================
+# DATETIME SAFETY
+# ======================================================
 
 if "Date" in df.columns:
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df = df.dropna(subset=["Date"])
     df = df.set_index("Date")
 else:
-    df = df.reset_index()
-    df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0], errors="coerce")
-    df = df.dropna(subset=[df.columns[0]])
-    df = df.set_index(df.columns[0])
+    df.index = pd.to_datetime(df.index, errors="coerce")
+    df = df[~df.index.isna()]
 
 df = df.sort_index()
 
 if df.empty:
-    st.error("No valid datetime values found.")
+    st.error("Dataset empty after datetime parsing.")
     st.stop()
 
-# =====================================================
-# HANDLE NULL RETURNS
-# =====================================================
-
-numeric_cols = df.columns
+# ======================================================
+# NUMERIC CLEANING
+# ======================================================
 
 df = df.apply(pd.to_numeric, errors="coerce")
 
-null_ratio = df.isna().mean().mean()
+# Remove columns with excessive missing values
+null_ratio = df.isna().mean()
+df = df.loc[:, null_ratio < 0.5]
 
-if null_ratio > 0.8:
-    st.warning("Most values are missing. Replacing None with 0 for demonstration.")
-    df = df.fillna(0)
-else:
-    df = df.fillna(method="ffill").fillna(0)
+if df.shape[1] < 2:
+    st.error("Not enough valid asset columns.")
+    st.stop()
+
+df = df.fillna(method="ffill").fillna(0)
 
 assets = df.copy()
 
-# =====================================================
-# SAFE RANGE SELECTION
-# =====================================================
+# ======================================================
+# SAFE DATE RANGE
+# ======================================================
 
-if len(assets) < 120:
-    st.warning("Limited observations available.")
-
-index_list = assets.index.to_list()
-
-if len(index_list) < 2:
-    st.error("Not enough data points.")
-    st.stop()
+date_list = assets.index.tolist()
 
 date_range = st.select_slider(
-    "Date Range",
-    options=index_list,
-    value=(index_list[0], index_list[-1])
+    "Select Date Range",
+    options=date_list,
+    value=(date_list[0], date_list[-1])
 )
 
 filtered = assets.loc[date_range[0]:date_range[1]]
 
-returns = filtered.copy()
+if len(filtered) < 100:
+    st.warning("Short time window — statistical stability reduced.")
 
-# =====================================================
+# ======================================================
 # ROLLING CONTAGION INDEX
-# =====================================================
+# ======================================================
 
-st.subheader("Rolling Contagion Index")
+st.subheader("1. Rolling Contagion Index")
 
-window = st.slider("Rolling Window (days)", 30, 150, 60)
+window = st.slider("Rolling Window (Days)", 30, 150, 60)
 
-if len(returns) <= window:
-    st.warning("Window too large.")
-    st.stop()
+density_values = []
 
-density = []
-
-for i in range(window, len(returns)):
-    corr = returns.iloc[i-window:i].corr().fillna(0)
-    upper_vals = corr.abs().values[np.triu_indices_from(corr, k=1)]
-    density.append(np.mean(upper_vals))
+for i in range(window, len(filtered)):
+    corr = filtered.iloc[i-window:i].corr()
+    upper = corr.values[np.triu_indices_from(corr, k=1)]
+    density_values.append(np.nanmean(np.abs(upper)))
 
 density_series = pd.Series(
-    density,
-    index=returns.index[window:]
+    density_values,
+    index=filtered.index[window:]
 )
 
-fig_density = px.line(
+fig1 = px.line(
     density_series,
     template="plotly_dark",
-    title="Average Absolute Correlation (Contagion Index)"
+    title="Average Absolute Correlation Over Time"
 )
 
-st.plotly_chart(fig_density, use_container_width=True)
+st.plotly_chart(fig1, use_container_width=True)
 
-# =====================================================
-# CURRENT CORRELATION HEATMAP
-# =====================================================
+# ======================================================
+# CORRELATION HEATMAP
+# ======================================================
 
-st.subheader("Current Correlation Matrix")
+st.subheader("2. Current Correlation Matrix")
 
-corr_matrix = returns.iloc[-window:].corr().fillna(0)
+corr_matrix = filtered.iloc[-window:].corr().fillna(0)
 
-fig_heat = px.imshow(
+fig2 = px.imshow(
     corr_matrix,
     text_auto=True,
     zmin=-1,
@@ -128,33 +117,50 @@ fig_heat = px.imshow(
     color_continuous_scale="RdBu"
 )
 
-fig_heat.update_layout(template="plotly_dark")
-st.plotly_chart(fig_heat, use_container_width=True)
+fig2.update_layout(template="plotly_dark")
+st.plotly_chart(fig2, use_container_width=True)
 
-# =====================================================
-# SYSTEMIC CENTRALITY
-# =====================================================
+# ======================================================
+# CORRELATION DISTRIBUTION
+# ======================================================
 
-st.subheader("Systemic Centrality")
+st.subheader("3. Correlation Distribution")
+
+upper_vals = corr_matrix.values[np.triu_indices_from(corr_matrix, k=1)]
+
+fig3 = px.histogram(
+    upper_vals,
+    nbins=30,
+    template="plotly_dark",
+    title="Pairwise Correlation Distribution"
+)
+
+st.plotly_chart(fig3, use_container_width=True)
+
+# ======================================================
+# CENTRALITY BAR CHART
+# ======================================================
+
+st.subheader("4. Systemic Centrality Score")
 
 centrality = corr_matrix.abs().mean().sort_values(ascending=False)
 
-fig_cent = px.bar(
+fig4 = px.bar(
     centrality,
     template="plotly_dark",
     title="Mean Absolute Correlation by Asset"
 )
 
-st.plotly_chart(fig_cent, use_container_width=True)
+st.plotly_chart(fig4, use_container_width=True)
 
-# =====================================================
+# ======================================================
 # DIVERSIFICATION RATIO
-# =====================================================
+# ======================================================
 
-st.subheader("Diversification Ratio")
+st.subheader("5. Diversification Ratio")
 
-vol = returns.std()
-cov = returns.cov().fillna(0)
+vol = filtered.std()
+cov = filtered.cov()
 
 weights = np.ones(len(vol)) / len(vol)
 
@@ -165,50 +171,35 @@ div_ratio = weighted_vol / portfolio_vol if portfolio_vol > 0 else 0
 
 st.metric("Diversification Ratio", f"{div_ratio:.2f}")
 
-# =====================================================
+# ======================================================
 # EIGENVALUE SPECTRUM
-# =====================================================
+# ======================================================
 
-st.subheader("Eigenvalue Spectrum")
+st.subheader("6. Eigenvalue Spectrum")
 
 try:
     eigvals = np.linalg.eigvals(corr_matrix.values)
     eigvals = np.real(eigvals)
 
-    fig_eig = px.bar(
+    fig6 = px.bar(
         eigvals,
         template="plotly_dark",
         title="Eigenvalue Distribution"
     )
 
-    st.plotly_chart(fig_eig, use_container_width=True)
+    st.plotly_chart(fig6, use_container_width=True)
 
     concentration = eigvals.max() / eigvals.sum()
     st.metric("Systemic Concentration Ratio", f"{concentration:.2f}")
 
 except:
-    st.warning("Eigenvalue calculation unstable.")
+    st.warning("Eigenvalue decomposition unstable.")
 
-# =====================================================
-# CORRELATION DISTRIBUTION
-# =====================================================
+# ======================================================
+# NETWORK STRESS GAUGE
+# ======================================================
 
-st.subheader("Correlation Distribution")
-
-upper_vals = corr_matrix.values[np.triu_indices_from(corr_matrix, k=1)]
-
-fig_hist = px.histogram(
-    upper_vals,
-    nbins=30,
-    template="plotly_dark",
-    title="Pairwise Correlation Distribution"
-)
-
-st.plotly_chart(fig_hist, use_container_width=True)
-
-# =====================================================
-# CONTAGION REGIME CLASSIFICATION
-# =====================================================
+st.subheader("7. Network Stress Gauge")
 
 current_density = density_series.iloc[-1]
 
@@ -220,16 +211,16 @@ if current_density > high:
 elif current_density < low:
     regime = "Low Contagion"
 else:
-    regime = "Medium Contagion"
+    regime = "Moderate Contagion"
 
 st.metric("Current Contagion Regime", regime)
 
 st.markdown("""
-### Interpretation
+### Analytical Interpretation
 
-• Rising contagion → correlation compression  
-• Large eigenvalue concentration → systemic dominance  
-• Low diversification ratio → fragile allocation  
+• High rolling density → systemic coupling  
+• Large dominant eigenvalue → single risk factor dominance  
+• Low diversification ratio → hidden fragility  
 
-High contagion often precedes drawdowns.
+Correlation convergence often precedes liquidity stress.
 """)
