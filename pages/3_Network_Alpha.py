@@ -21,104 +21,67 @@ if "market_data_template" not in data:
 raw_df = data["market_data_template"].copy()
 
 # =====================================================
-# FORCE DATETIME INDEX (NO ASSUMPTIONS)
+# FORCE FIRST COLUMN AS DATE INDEX (DETERMINISTIC)
 # =====================================================
 
 df = raw_df.copy()
 
-# Case 1: Already datetime index
-if not isinstance(df.index, pd.DatetimeIndex):
+# Always reset index to avoid double parsing
+df = df.reset_index()
 
-    # Try to find a date column
-    date_column = None
+# Assume first column contains dates
+date_col = df.columns[0]
 
-    for col in df.columns:
-        try:
-            parsed = pd.to_datetime(df[col], errors="coerce")
-            if parsed.notna().sum() > len(df) * 0.7:
-                date_column = col
-                break
-        except:
-            continue
+df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
 
-    if date_column is None:
-        st.error("No valid date column detected.")
-        st.stop()
-
-    df[date_column] = pd.to_datetime(df[date_column], errors="coerce")
-    df = df.dropna(subset=[date_column])
-    df = df.set_index(date_column)
-
-# Now we guarantee datetime index
-df.index = pd.to_datetime(df.index, errors="coerce")
-df = df[~df.index.isna()]
+# Drop invalid dates
+df = df.dropna(subset=[date_col])
 
 if df.empty:
-    st.error("Datetime index conversion failed — dataset empty.")
+    st.error("No valid datetime values found in first column.")
     st.stop()
 
+df = df.set_index(date_col)
 df = df.sort_index()
 
-# =====================================================
-# ENSURE NUMERIC ASSETS
-# =====================================================
-
+# Keep only numeric columns
 df = df.apply(pd.to_numeric, errors="coerce")
 df = df.dropna(how="all")
 
 if df.shape[1] < 3:
-    st.error("Need at least 3 asset columns.")
+    st.error("At least 3 numeric asset columns required.")
     st.stop()
 
 assets = df.copy()
 
 # =====================================================
-# SAFE DATE FILTER
+# DATE RANGE FILTER (SAFE)
 # =====================================================
 
 min_date = assets.index.min()
 max_date = assets.index.max()
 
-if pd.isna(min_date) or pd.isna(max_date):
-    st.error("Invalid datetime bounds.")
-    st.stop()
-
-col1, col2 = st.columns(2)
-
-with col1:
-    start_date = st.date_input(
-        "Start Date",
-        value=min_date.date(),
-        min_value=min_date.date(),
-        max_value=max_date.date()
-    )
-
-with col2:
-    end_date = st.date_input(
-        "End Date",
-        value=max_date.date(),
-        min_value=min_date.date(),
-        max_value=max_date.date()
-    )
+start_date = st.date_input("Start Date", value=min_date)
+end_date = st.date_input("End Date", value=max_date)
 
 if start_date >= end_date:
-    st.warning("Start date must be earlier than end date.")
+    st.warning("Invalid date range selected.")
     st.stop()
 
-assets = assets.loc[
+filtered = assets.loc[
     (assets.index >= pd.to_datetime(start_date)) &
     (assets.index <= pd.to_datetime(end_date))
 ]
 
-if len(assets) < 120:
-    st.warning("Not enough data after filtering.")
+if len(filtered) < 100:
+    st.warning("Not enough data in selected range.")
     st.stop()
 
 # =====================================================
 # RETURNS
 # =====================================================
 
-returns = assets.pct_change().dropna()
+returns = filtered.pct_change().dropna()
 
 # =====================================================
 # ROLLING CONTAGION INDEX
@@ -129,7 +92,7 @@ st.subheader("Rolling Contagion Index")
 window = st.slider("Rolling Window (days)", 30, 150, 60)
 
 if len(returns) <= window:
-    st.warning("Window too large for selected range.")
+    st.warning("Window too large.")
     st.stop()
 
 density = []
@@ -147,13 +110,13 @@ density_series = pd.Series(
 fig_density = px.line(
     density_series,
     template="plotly_dark",
-    title="Average Absolute Correlation (Contagion Index)"
+    title="Average Absolute Correlation (Systemic Contagion)"
 )
 
 st.plotly_chart(fig_density, use_container_width=True)
 
 # =====================================================
-# CORRELATION HEATMAP
+# CURRENT CORRELATION MATRIX
 # =====================================================
 
 st.subheader("Current Correlation Matrix")
@@ -169,11 +132,10 @@ fig_heat = px.imshow(
 )
 
 fig_heat.update_layout(template="plotly_dark")
-
 st.plotly_chart(fig_heat, use_container_width=True)
 
 # =====================================================
-# CENTRALITY
+# SYSTEMIC CENTRALITY
 # =====================================================
 
 st.subheader("Systemic Centrality")
@@ -207,7 +169,7 @@ div_ratio = weighted_vol / portfolio_vol if portfolio_vol > 0 else 0
 st.metric("Diversification Ratio", f"{div_ratio:.2f}")
 
 # =====================================================
-# EIGENVALUE ANALYSIS
+# EIGENVALUE SPECTRUM
 # =====================================================
 
 st.subheader("Eigenvalue Spectrum")
@@ -228,7 +190,7 @@ try:
     st.metric("Systemic Concentration Ratio", f"{concentration:.2f}")
 
 except:
-    st.warning("Eigenvalue calculation unstable.")
+    st.warning("Eigenvalue computation unstable.")
 
 # =====================================================
 # CORRELATION DISTRIBUTION
@@ -246,3 +208,32 @@ fig_hist = px.histogram(
 )
 
 st.plotly_chart(fig_hist, use_container_width=True)
+
+# =====================================================
+# CONTAGION REGIME CLASSIFICATION
+# =====================================================
+
+current_density = density_series.iloc[-1]
+
+low = density_series.quantile(0.25)
+high = density_series.quantile(0.75)
+
+if current_density > high:
+    regime = "High Contagion"
+elif current_density < low:
+    regime = "Low Contagion"
+else:
+    regime = "Medium Contagion"
+
+st.metric("Current Contagion Regime", regime)
+
+st.markdown("""
+### Interpretation
+
+• Rising contagion index = tightening correlations  
+• High centrality = systemic dominance  
+• Large first eigenvalue = market behaving as single factor  
+• Low diversification ratio = fragile allocation  
+
+Diversification fails when correlations compress.
+""")
