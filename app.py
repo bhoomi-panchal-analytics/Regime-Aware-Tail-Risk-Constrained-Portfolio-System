@@ -16,6 +16,16 @@ capital = st.sidebar.number_input("Capital Available", min_value=1000.0)
 risk_threshold = st.sidebar.slider("Risk Tolerance (0-1)", 0.0, 1.0, 0.5)
 investment_horizon = st.sidebar.selectbox("Investment Horizon",
                                            ["Short Term", "Medium Term", "Long Term"])
+st.markdown(f"""
+### Investor Profile Summary
+
+- Name: {name}
+- Age: {age}
+- Capital: {capital}
+- Risk Tolerance: {risk_threshold}
+- Horizon: {investment_horizon}
+""")
+
 
 
 # ======================================
