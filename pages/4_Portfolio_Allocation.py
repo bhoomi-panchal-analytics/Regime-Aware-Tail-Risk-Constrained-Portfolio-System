@@ -4,52 +4,42 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from utils.load_data import load_all
-from scipy.stats import kurtosis, skew, t
 
 st.set_page_config(layout="wide")
-st.title("Advanced Portfolio Allocation & Tail Risk Engine")
+st.title("Portfolio Allocation & Tail Risk Engine")
 
 # ==========================
-# LOAD DATA (ROBUST)
+# Load Data Safely
 # ==========================
 
 data = load_all()
 
-# Auto-detect market-like dataset
-assets = None
-for key in data:
-    df = data[key]
-    if isinstance(df, pd.DataFrame) and df.shape[1] >= 3:
-        assets = df
-        break
+assets = data.get("market_data")
 
-if assets is None:
-    st.error("No suitable market dataset found.")
-    st.stop()
+# Fallback if market_data missing
+if assets is None or assets.empty:
+    st.warning("market_data not found. Attempting fallback to ETF prices.")
+    possible = ["SPY", "TLT", "GLD", "DBC", "UUP", "SHY"]
+    fallback = {}
+    for k in possible:
+        if k in data:
+            fallback[k] = data[k]
+    if fallback:
+        assets = pd.DataFrame(fallback)
+    else:
+        st.error("No usable asset data found.")
+        st.stop()
 
 assets = assets.apply(pd.to_numeric, errors="coerce").dropna()
-
-# ==========================
-# Timeline Selection
-# ==========================
-
-start_date = st.date_input("Start Date", assets.index.min())
-end_date = st.date_input("End Date", assets.index.max())
-
-assets = assets.loc[
-    (assets.index >= pd.to_datetime(start_date)) &
-    (assets.index <= pd.to_datetime(end_date))
-]
-
 returns = assets.pct_change().dropna()
 
 # ==========================
 # Sidebar Controls
 # ==========================
 
-st.sidebar.header("Investor Configuration")
+st.sidebar.header("Portfolio Settings")
 
-capital = st.sidebar.number_input("Capital", value=100000.0)
+capital = st.sidebar.number_input("Initial Capital", value=100000.0)
 risk_aversion = st.sidebar.slider("Risk Aversion", 0.0, 1.0, 0.5)
 confidence_level = st.sidebar.slider("VaR Confidence Level", 0.90, 0.99, 0.95)
 
@@ -66,7 +56,7 @@ if len(selected_assets) < 2:
 returns = returns[selected_assets]
 
 # ==========================
-# MEAN VARIANCE CORE
+# Core Mean-Variance
 # ==========================
 
 mean_returns = returns.mean()
@@ -75,172 +65,162 @@ cov_matrix = returns.cov()
 inv_cov = np.linalg.pinv(cov_matrix.values)
 weights = inv_cov @ mean_returns.values
 weights = weights / np.sum(weights)
-weights *= (1 - risk_aversion)
-weights /= np.sum(weights)
+
+weights = weights * (1 - risk_aversion)
+weights = weights / np.sum(weights)
+
+weights_df = pd.DataFrame(weights, index=selected_assets, columns=["Weight"])
+
+st.subheader("Optimal Weights")
+st.dataframe(weights_df)
 
 portfolio_returns = returns @ weights
+portfolio_growth = capital * (1 + portfolio_returns).cumprod()
 
 # ==========================
-# METRICS
+# Basic Metrics
 # ==========================
 
-port_return = np.dot(weights, mean_returns)
-port_vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
+port_return = portfolio_returns.mean()
+port_vol = portfolio_returns.std()
 sharpe = port_return / port_vol
-
-st.subheader("Portfolio Metrics")
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Expected Return", f"{port_return:.4f}")
 col2.metric("Volatility", f"{port_vol:.4f}")
-col3.metric("Sharpe", f"{sharpe:.4f}")
+col3.metric("Sharpe Ratio", f"{sharpe:.4f}")
 
 # ==========================
-# 1️⃣ Weight Distribution
+# Cumulative Growth
 # ==========================
 
-fig_weights = px.pie(
-    names=selected_assets,
-    values=weights,
-    title="Portfolio Weights",
+fig_growth = px.line(
+    portfolio_growth,
+    title="Cumulative Portfolio Growth",
     template="plotly_dark"
 )
-st.plotly_chart(fig_weights, use_container_width=True)
-
-# ==========================
-# 2️⃣ Cumulative Growth
-# ==========================
-
-growth = (1 + portfolio_returns).cumprod()
-fig_growth = px.line(growth, template="plotly_dark", title="Cumulative Growth")
 st.plotly_chart(fig_growth, use_container_width=True)
 
 # ==========================
-# 3️⃣ Drawdown
+# Drawdown
 # ==========================
 
-rolling_max = growth.cummax()
-drawdown = (growth - rolling_max) / rolling_max
-fig_dd = px.line(drawdown, template="plotly_dark", title="Drawdown")
+rolling_max = portfolio_growth.cummax()
+drawdown = (portfolio_growth - rolling_max) / rolling_max
+
+fig_dd = px.line(drawdown, title="Drawdown Profile", template="plotly_dark")
 st.plotly_chart(fig_dd, use_container_width=True)
 
 # ==========================
-# 4️⃣ Rolling Volatility
+# Tail Risk Analysis
 # ==========================
 
-rolling_vol = portfolio_returns.rolling(30).std()
-fig_vol = px.line(rolling_vol, template="plotly_dark", title="Rolling Volatility")
-st.plotly_chart(fig_vol, use_container_width=True)
+st.subheader("Tail Risk Analysis")
 
-# ==========================
-# 5️⃣ Rolling Sharpe
-# ==========================
+# Historical VaR
+var = np.quantile(portfolio_returns, 1 - confidence_level)
 
-rolling_sharpe = portfolio_returns.rolling(60).mean() / portfolio_returns.rolling(60).std()
-fig_rs = px.line(rolling_sharpe, template="plotly_dark", title="Rolling Sharpe")
-st.plotly_chart(fig_rs, use_container_width=True)
-
-# ==========================
-# 6️⃣ Correlation Heatmap
-# ==========================
-
-fig_corr = px.imshow(
-    returns.corr(),
-    template="plotly_dark",
-    color_continuous_scale="RdBu",
-    title="Correlation Matrix"
-)
-st.plotly_chart(fig_corr, use_container_width=True)
-
-# ==========================
-# 7️⃣ Tail Risk — VaR & CVaR
-# ==========================
-
-var = np.percentile(portfolio_returns, (1-confidence_level)*100)
+# CVaR
 cvar = portfolio_returns[portfolio_returns <= var].mean()
 
-st.subheader("Tail Risk Metrics")
-col4, col5 = st.columns(2)
-col4.metric("Value at Risk", f"{var:.4f}")
-col5.metric("Conditional VaR", f"{cvar:.4f}")
+col1, col2 = st.columns(2)
+col1.metric("Value at Risk", f"{var:.4f}")
+col2.metric("Conditional VaR", f"{cvar:.4f}")
 
 # ==========================
-# 8️⃣ Return Distribution
+# Fat vs Thin Tail Diagnostics
 # ==========================
+
+st.subheader("Distribution & Tail Diagnostics")
+
+# Skewness
+skewness = portfolio_returns.skew()
+
+# Kurtosis
+kurt = portfolio_returns.kurtosis()
+
+col1, col2 = st.columns(2)
+col1.metric("Skewness", f"{skewness:.4f}")
+col2.metric("Kurtosis", f"{kurt:.4f}")
 
 fig_hist = px.histogram(
     portfolio_returns,
-    nbins=50,
-    template="plotly_dark",
-    title="Return Distribution"
+    nbins=60,
+    title="Return Distribution",
+    template="plotly_dark"
 )
 st.plotly_chart(fig_hist, use_container_width=True)
 
 # ==========================
-# 9️⃣ Kurtosis & Skew
+# QQ-Style Comparison
 # ==========================
 
-kurt = kurtosis(portfolio_returns)
-skw = skew(portfolio_returns)
+sorted_returns = np.sort(portfolio_returns)
+normal_sample = np.sort(np.random.normal(port_return, port_vol, len(portfolio_returns)))
 
-st.subheader("Distribution Shape")
-col6, col7 = st.columns(2)
-col6.metric("Kurtosis (Tail Fatness)", f"{kurt:.4f}")
-col7.metric("Skewness", f"{skw:.4f}")
+fig_qq = go.Figure()
 
-# ==========================
-# 🔟 Normal vs Fat Tail Comparison
-# ==========================
+fig_qq.add_trace(go.Scatter(
+    x=normal_sample,
+    y=sorted_returns,
+    mode="markers",
+    name="Empirical vs Normal"
+))
 
-x = np.linspace(portfolio_returns.min(), portfolio_returns.max(), 100)
-normal_pdf = (1/(port_vol*np.sqrt(2*np.pi))) * np.exp(-0.5*((x-port_return)/port_vol)**2)
-t_pdf = t.pdf((x-port_return)/port_vol, df=4)
+fig_qq.update_layout(
+    title="QQ-Style Tail Comparison",
+    template="plotly_dark"
+)
 
-fig_tail = go.Figure()
-fig_tail.add_trace(go.Scatter(x=x, y=normal_pdf, name="Normal"))
-fig_tail.add_trace(go.Scatter(x=x, y=t_pdf, name="Fat Tail (t-dist)"))
-
-fig_tail.update_layout(template="plotly_dark", title="Thin vs Fat Tail Comparison")
-st.plotly_chart(fig_tail, use_container_width=True)
+st.plotly_chart(fig_qq, use_container_width=True)
 
 # ==========================
-# 11️⃣ Monte Carlo Simulation
+# Rolling CVaR
 # ==========================
 
-st.subheader("Monte Carlo Projection")
+rolling_cvar = portfolio_returns.rolling(60).apply(
+    lambda x: np.mean(x[x <= np.quantile(x, 1 - confidence_level)])
+)
 
-simulations = 300
-horizon = 60
-paths = []
+fig_rcvar = px.line(
+    rolling_cvar,
+    title="Rolling CVaR (60-day)",
+    template="plotly_dark"
+)
 
-for _ in range(simulations):
-    sim = np.random.normal(port_return, port_vol, horizon)
-    paths.append(capital * np.cumprod(1 + sim))
-
-paths = np.array(paths)
-
-fig_mc = go.Figure()
-for i in range(50):
-    fig_mc.add_trace(go.Scatter(y=paths[i], mode="lines", showlegend=False))
-
-fig_mc.update_layout(template="plotly_dark", title="Monte Carlo Paths")
-st.plotly_chart(fig_mc, use_container_width=True)
+st.plotly_chart(fig_rcvar, use_container_width=True)
 
 # ==========================
-# 12️⃣ Ending Capital Distribution
+# Diversification Ratio
 # ==========================
 
-fig_end = px.histogram(paths[:, -1], nbins=40,
-                       template="plotly_dark",
-                       title="Distribution of Ending Capital")
-st.plotly_chart(fig_end, use_container_width=True)
+weighted_vol = np.sum(weights * np.sqrt(np.diag(cov_matrix)))
+div_ratio = weighted_vol / port_vol
+
+st.subheader("Diversification Strength")
+st.metric("Diversification Ratio", f"{div_ratio:.4f}")
+
+# ==========================
+# Risk Contribution
+# ==========================
+
+marginal = cov_matrix @ weights
+risk_contrib = weights * marginal / port_vol
+
+fig_rc = px.bar(
+    x=selected_assets,
+    y=risk_contrib,
+    title="Risk Contribution by Asset",
+    template="plotly_dark"
+)
+st.plotly_chart(fig_rc, use_container_width=True)
 
 st.markdown("""
-### Capital Preservation Insights
+### Interpretation
 
-• VaR and CVaR quantify downside risk  
-• Kurtosis measures tail heaviness  
-• Fat-tail overlay reveals non-Gaussian risk  
-• Monte Carlo projects probabilistic capital outcomes  
-• Diversification reduces but does not eliminate tail exposure  
+• VaR and CVaR quantify downside exposure  
+• Kurtosis > 3 indicates fat tails  
+• Skewness reveals asymmetry  
+• Rolling CVaR tracks regime-dependent tail risk  
+• Diversification ratio measures structural robustness  
 """)
