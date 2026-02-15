@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
 import plotly.graph_objects as go
 from utils.load_data import load_all
 
@@ -18,19 +17,14 @@ garch = None
 vix = None
 
 for key, df in data.items():
-    if isinstance(df, pd.DataFrame) and df.shape[1] >= 1:
-
+    if isinstance(df, pd.DataFrame):
         numeric = df.apply(pd.to_numeric, errors="coerce").dropna()
         if numeric.empty:
             continue
 
-        max_val = numeric.max().max()
-        mean_val = numeric.mean().mean()
-
-        # heuristic detection
-        if 0 < mean_val < 2:
+        if numeric.mean().mean() < 2:
             garch = numeric
-        if max_val > 5:
+        if numeric.max().max() > 5:
             vix = numeric
 
 if garch is None or vix is None:
@@ -47,19 +41,13 @@ vix.index = pd.to_datetime(vix.index, errors="coerce")
 garch = garch[~garch.index.isna()].sort_index()
 vix = vix[~vix.index.isna()].sort_index()
 
-# =====================================================
-# RESAMPLE TO BUSINESS DAILY & FILL
-# =====================================================
-
 garch = garch.resample("B").mean().ffill()
 vix = vix.resample("B").mean().ffill()
 
-# ALIGN
-combined = pd.concat([garch, vix], axis=1)
-combined = combined.ffill().dropna()
+combined = pd.concat([garch, vix], axis=1).dropna()
 
 if combined.empty:
-    st.error("After synchronization, dataset is empty.")
+    st.error("No overlapping data after synchronization.")
     st.stop()
 
 garch_col = combined.columns[0]
@@ -86,14 +74,14 @@ combined = combined.loc[
 ]
 
 if combined.empty:
-    st.warning("No data in selected date range.")
+    st.warning("No data in selected range.")
     st.stop()
 
 # =====================================================
-# MAIN VOLATILITY COMPARISON
+# MAIN COMPARISON
 # =====================================================
 
-st.subheader("Forecast vs Implied Volatility")
+st.subheader("Volatility Forecast vs Implied Vol")
 
 fig = go.Figure()
 
@@ -107,37 +95,40 @@ fig.add_trace(go.Scatter(
 fig.add_trace(go.Scatter(
     x=combined.index,
     y=combined[vix_col],
-    name="VIX (Implied Vol)",
+    name="VIX",
     line=dict(width=2)
 ))
 
-# Crisis shading
 fig.add_vrect(x0="2008-01-01", x1="2009-06-01",
-              fillcolor="red", opacity=0.2, line_width=0)
+              fillcolor="red", opacity=0.15, line_width=0)
 
 fig.add_vrect(x0="2020-02-01", x1="2020-06-01",
-              fillcolor="orange", opacity=0.2, line_width=0)
+              fillcolor="orange", opacity=0.15, line_width=0)
 
 fig.update_layout(template="plotly_dark")
+
 st.plotly_chart(fig, use_container_width=True)
 
 # =====================================================
-# VOLATILITY RISK PREMIUM
+# VOL RISK PREMIUM
 # =====================================================
 
-st.subheader("Volatility Risk Premium (VIX − Forecast)")
+st.subheader("Volatility Risk Premium")
 
 spread = combined[vix_col] - combined[garch_col]
 
-fig_spread = px.line(
-    spread,
-    template="plotly_dark"
-)
+fig_spread = go.Figure()
+fig_spread.add_trace(go.Scatter(
+    x=combined.index,
+    y=spread,
+    name="VIX - Forecast"
+))
+fig_spread.update_layout(template="plotly_dark")
 
 st.plotly_chart(fig_spread, use_container_width=True)
 
 # =====================================================
-# CLUSTERING CHECK
+# VOLATILITY CLUSTERING (MANUAL OLS)
 # =====================================================
 
 st.subheader("Volatility Clustering Test")
@@ -148,27 +139,52 @@ lag = vol.shift(1)
 cluster_df = pd.concat([lag, vol], axis=1).dropna()
 cluster_df.columns = ["Lagged", "Current"]
 
-fig_cluster = px.scatter(
-    cluster_df,
-    x="Lagged",
-    y="Current",
-    template="plotly_dark",
-    trendline="ols"
-)
+x = cluster_df["Lagged"].values
+y = cluster_df["Current"].values
 
-st.plotly_chart(fig_cluster, use_container_width=True)
+if len(x) > 10:
+
+    beta = np.cov(x, y)[0, 1] / np.var(x)
+    alpha = y.mean() - beta * x.mean()
+
+    reg_line = alpha + beta * x
+
+    fig_cluster = go.Figure()
+
+    fig_cluster.add_trace(go.Scatter(
+        x=x,
+        y=y,
+        mode="markers",
+        name="Observed"
+    ))
+
+    fig_cluster.add_trace(go.Scatter(
+        x=x,
+        y=reg_line,
+        mode="lines",
+        name="OLS Fit"
+    ))
+
+    fig_cluster.update_layout(template="plotly_dark")
+
+    st.plotly_chart(fig_cluster, use_container_width=True)
+
+    st.metric("Volatility Persistence (β)", f"{beta:.4f}")
+
+else:
+    st.warning("Not enough data for clustering test.")
 
 # =====================================================
-# PERSISTENCE METRIC
+# AUTOCORRELATION
 # =====================================================
 
-st.subheader("Volatility Persistence")
+st.subheader("Volatility Autocorrelation")
 
-persistence = vol.autocorr(lag=1)
-st.metric("Lag-1 Autocorrelation", f"{persistence:.4f}")
+autocorr = vol.autocorr(lag=1)
+st.metric("Lag-1 Autocorrelation", f"{autocorr:.4f}")
 
 # =====================================================
-# EXTREME SPIKES
+# EXTREME EVENTS
 # =====================================================
 
 st.subheader("Extreme Volatility Events (Top 5%)")
@@ -176,65 +192,13 @@ st.subheader("Extreme Volatility Events (Top 5%)")
 threshold = vol.quantile(0.95)
 extreme = vol[vol > threshold]
 
-fig_extreme = px.scatter(
+fig_extreme = go.Figure()
+fig_extreme.add_trace(go.Scatter(
     x=extreme.index,
     y=extreme,
-    template="plotly_dark"
-)
+    mode="markers",
+    name="Extreme Events"
+))
+fig_extreme.update_layout(template="plotly_dark")
 
 st.plotly_chart(fig_extreme, use_container_width=True)
-
-st.markdown("""
-### Interpretation
-
-• Resampling ensures synchronization  
-• Clustering confirms heteroskedasticity  
-• Spread reflects volatility risk premium  
-• Persistence indicates regime memory  
-• Extreme spikes align with systemic crises  
-
-This is now production-aligned volatility diagnostics.
-""")
-# =====================================================
-# VOLATILITY CLUSTERING (MANUAL REGRESSION)
-# =====================================================
-
-st.subheader("Volatility Clustering Test")
-
-vol = combined[garch_col]
-lag = vol.shift(1)
-
-cluster_df = pd.concat([lag, vol], axis=1).dropna()
-cluster_df.columns = ["Lagged", "Current"]
-
-# Manual OLS using numpy
-x = cluster_df["Lagged"].values
-y = cluster_df["Current"].values
-
-beta = np.cov(x, y)[0, 1] / np.var(x)
-alpha = y.mean() - beta * x.mean()
-
-reg_line = alpha + beta * x
-
-fig_cluster = go.Figure()
-
-fig_cluster.add_trace(go.Scatter(
-    x=x,
-    y=y,
-    mode="markers",
-    name="Observed"
-))
-
-fig_cluster.add_trace(go.Scatter(
-    x=x,
-    y=reg_line,
-    mode="lines",
-    name="OLS Fit"
-))
-
-fig_cluster.update_layout(template="plotly_dark")
-
-st.plotly_chart(fig_cluster, use_container_width=True)
-
-st.metric("Volatility Persistence (β)", f"{beta:.4f}")
-
