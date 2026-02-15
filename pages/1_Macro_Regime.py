@@ -3,17 +3,21 @@ import plotly.express as px
 import pandas as pd
 from utils.load_data import load_all
 
+
 st.title("Macro Regime Probability Heatmap")
 
 data = load_all()
+macro = data["macro"]
+
 regime_probs = data["regime_probs"]
 
+
 fig = px.imshow(
-    regime_probs.T,
+    macro.corr(),
     aspect="auto",
-    color_continuous_scale="RdBu_r",
-    labels=dict(x="Time", y="Regime", color="Probability")
+    color_continuous_scale="RdBu_r"
 )
+
 
 st.plotly_chart(fig, use_container_width=True)
 
