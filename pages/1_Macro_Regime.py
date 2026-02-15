@@ -1,45 +1,31 @@
 import streamlit as st
 import plotly.express as px
-import pandas as pd
 from utils.load_data import load_all
+
+st.title("Macro Regime Probability Heatmap")
+
 data = load_all()
 regime_probs = data["regime_probs"]
 
 if regime_probs.empty:
-    st.warning("Regime probabilities file missing.")
+    st.warning("Regime probabilities file missing or empty.")
     st.stop()
 
+# Ensure numeric
+regime_probs = regime_probs.apply(pd.to_numeric, errors='coerce')
 
-import plotly.express as px
-
-if regime_probs.empty:
-    st.warning("Regime data empty.")
-    st.stop()
+st.write("Shape:", regime_probs.shape)
 
 fig = px.imshow(
-    regime_probs.T.values,
+    regime_probs.T,
     aspect="auto",
-    color_continuous_scale="RdBu_r"
+    color_continuous_scale="RdBu_r",
+    labels=dict(x="Time", y="Regime", color="Probability")
 )
 
 fig.update_layout(
-    xaxis_title="Time",
+    xaxis_title="Date",
     yaxis_title="Regime"
 )
 
 st.plotly_chart(fig, use_container_width=True)
-
-
-st.markdown("### Crisis Highlights")
-
-crises = {
-    "2008 Crisis": ("2008-01-01", "2009-06-01"),
-    "2012 Euro Stress": ("2012-01-01", "2012-12-01"),
-    "2017 Calm Growth": ("2017-01-01", "2017-12-01"),
-    "2020 COVID": ("2020-02-01", "2020-06-01"),
-}
-
-for name, (start, end) in crises.items():
-    st.write("Data shape:", regime_probs.shape)
-    st.write(regime_probs.head())
-
