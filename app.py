@@ -14,215 +14,203 @@ except Exception as e:
     st.error(f"Import failed: {e}")
     st.stop()
 
-# =====================================================
-# PAGE CONFIG
-# =====================================================
+import streamlit as st
+import pandas as pd
+from utils.load_data import load_all
 
 st.set_page_config(
-    page_title="Regime-Aware Capital Allocation System",
+    page_title="Regime-Aware Risk Allocation System",
     layout="wide"
 )
 
 st.title("Regime-Aware Tail-Risk Constrained Portfolio System")
-
-# =====================================================
-# SIDEBAR – INVESTOR PROFILE
-# =====================================================
-
-st.sidebar.header("Investor Profile")
+st.sidebar.subheader("Investor Profile")
 
 name = st.sidebar.text_input("Name")
-age = st.sidebar.number_input("Age", 18, 90, 30)
-capital = st.sidebar.number_input("Capital ($)", min_value=1000.0, value=100000.0)
+age = st.sidebar.number_input("Age", 18, 80)
+capital = st.sidebar.number_input("Capital Available", min_value=1000.0)
 risk_threshold = st.sidebar.slider("Risk Tolerance (0-1)", 0.0, 1.0, 0.5)
-horizon = st.sidebar.selectbox(
-    "Investment Horizon",
-    ["Short Term", "Medium Term", "Long Term"]
-)
+investment_horizon = st.sidebar.selectbox("Investment Horizon",
+                                           ["Short Term", "Medium Term", "Long Term"])
+st.markdown(f"""
+### Investor Profile Summary
 
-st.sidebar.markdown("---")
+- Name: {name}
+- Age: {age}
+- Capital: {capital}
+- Risk Tolerance: {risk_threshold}
+- Horizon: {investment_horizon}
+""")
 
-st.sidebar.subheader("Governance Settings")
-enable_regime = st.sidebar.checkbox("Enable Regime Overlay", True)
-enable_vol = st.sidebar.checkbox("Enable Volatility Scaling", True)
-enable_contagion = st.sidebar.checkbox("Enable Contagion Filter", True)
 
-# =====================================================
+
+# ======================================
 # LOAD DATA
-# =====================================================
+# ======================================
 
 data = load_all()
 
 regime_probs = data.get("regime_probs", pd.DataFrame())
 garch = data.get("garch", pd.DataFrame())
-vix = data.get("vix", pd.DataFrame())
 contagion = data.get("contagion", pd.DataFrame())
-market_data = data.get("market_data", pd.DataFrame())
 
-# =====================================================
+# ======================================
 # SYSTEM OVERVIEW
-# =====================================================
+# ======================================
 
 st.markdown("""
-### System Purpose
+### System Objective
 
-This platform implements a hierarchical capital allocation framework designed to:
+This platform demonstrates a hierarchical capital allocation framework designed to:
 
-1. Detect macroeconomic regimes via probabilistic models.
-2. Estimate regime-dependent volatility (MS-GARCH).
-3. Monitor systemic contagion dynamics.
-4. Allocate capital under strict tail-risk constraints.
-5. Enforce governance-first risk control.
+- Detect macroeconomic regimes using unsupervised models (HMM)
+- Estimate regime-dependent volatility using MS-GARCH
+- Monitor systemic contagion risk
+- Allocate capital under strict tail-risk constraints
+- Preserve capital during regime shifts
 
-The objective is not prediction.  
-The objective is **capital preservation across structural regime shifts**.
+The system does **not** attempt short-term prediction.  
+It focuses on **risk adaptation and survival across market states**.
+
+1. Macro regime detection (HMM-based)
+2. Regime-dependent volatility estimation (MS-GARCH)
+3. Dynamic contagion monitoring
+4. Tail-risk constrained capital allocation
+5. Governance-first risk hierarchy
+
+The objective is long-term capital survival across structural regime shifts.
 """)
 
 st.markdown("---")
 
-# =====================================================
+# ======================================
 # LIVE SYSTEM STATUS
-# =====================================================
+# ======================================
 
 st.subheader("Current System State")
 
 col1, col2, col3 = st.columns(3)
 
-# Regime
+# --- Regime Status ---
 if not regime_probs.empty:
-    latest = regime_probs.iloc[-1]
-    dominant_regime = latest.idxmax()
-    confidence = latest.max()
+    latest_regime = regime_probs.iloc[-1]
+    dominant_regime = latest_regime.idxmax()
+    regime_prob = latest_regime.max()
     col1.metric("Dominant Regime", dominant_regime)
-    col1.metric("Regime Confidence", f"{confidence:.2f}")
+    col1.metric("Regime Confidence", round(regime_prob, 3))
 else:
     col1.warning("Regime data unavailable.")
 
-# Volatility
+# --- Volatility Status ---
 if not garch.empty:
-    current_vol = garch.iloc[-1, 0]
-    col2.metric("Volatility Forecast", f"{current_vol:.4f}")
+    latest_vol = garch.iloc[-1, 0]
+    col2.metric("Current Volatility Forecast", round(latest_vol, 4))
 else:
-    col2.warning("Volatility layer unavailable.")
+    col2.warning("Volatility data unavailable.")
 
-# Contagion
+# --- Contagion Status ---
 if not contagion.empty:
-    contagion_score = contagion.iloc[-1, 0]
-    col3.metric("Contagion Index", f"{contagion_score:.3f}")
+    latest_contagion = contagion.iloc[-1, 0]
+    col3.metric("Contagion Index", round(latest_contagion, 3))
 else:
-    col3.warning("Contagion layer unavailable.")
+    col3.warning("Contagion data unavailable.")
 
 st.markdown("---")
 
-# =====================================================
-# SYSTEM CONFIDENCE SCORE
-# =====================================================
+# ======================================
+# INTERACTIVE CONTROL PANEL
+# ======================================
 
-st.subheader("System Confidence Score")
+st.subheader("Interactive System Controls")
 
-score = 0
-layers = 3
+risk_mode = st.radio(
+    "Risk Management Mode",
+    ["Conservative", "Balanced", "Aggressive"]
+)
 
-if not regime_probs.empty:
-    score += 1
-if not garch.empty:
-    score += 1
-if not contagion.empty:
-    score += 1
+regime_overlay = st.checkbox("Enable Regime Overlay Logic", value=True)
+volatility_scaling = st.checkbox("Enable Volatility Scaling", value=True)
+contagion_filter = st.checkbox("Enable Contagion Risk Filter", value=True)
 
-confidence_percent = int((score / layers) * 100)
+st.markdown(f"""
+**Selected Mode:** {risk_mode}
 
-st.progress(confidence_percent / 100)
+- Conservative → Strong drawdown control  
+- Balanced → Risk-adjusted optimization  
+- Aggressive → Higher capital exposure  
 
-st.markdown(f"**Infrastructure Completeness:** {confidence_percent}%")
-
-if confidence_percent == 100:
-    st.success("All core layers operational.")
-elif confidence_percent >= 60:
-    st.warning("Partial system functionality.")
-else:
-    st.error("Critical layers missing.")
-
-st.markdown("---")
-
-# =====================================================
-# INVESTOR–SYSTEM FIT ANALYSIS
-# =====================================================
-
-st.subheader("Investor Risk Alignment")
-
-if not garch.empty:
-    vol_level = garch.iloc[-1, 0]
-
-    if risk_threshold < 0.3 and vol_level > 0.02:
-        st.error("Current volatility exceeds conservative tolerance.")
-    elif risk_threshold > 0.7:
-        st.info("Aggressive profile aligned with dynamic allocation.")
-    else:
-        st.success("Risk profile moderately aligned with system state.")
-else:
-    st.warning("Cannot assess alignment without volatility data.")
-
-st.markdown("---")
-
-# =====================================================
-# ARCHITECTURE EXPLANATION
-# =====================================================
-
-st.subheader("Architecture Hierarchy")
-
-st.markdown("""
-**Layer 1 — Macro Regime Detection**  
-Hidden Markov Models identify probabilistic market states.
-
-**Layer 2 — Volatility Estimation**  
-MS-GARCH captures regime-dependent variance clustering.
-
-**Layer 3 — Contagion Monitoring**  
-Dynamic dependency structures detect systemic amplification.
-
-**Layer 4 — Risk-Constrained Allocation**  
-Capital is allocated under CVaR and drawdown constraints.
-
-Higher layers override lower layers.  
-Governance always dominates alpha logic.
+Regime Overlay: {regime_overlay}  
+Volatility Scaling: {volatility_scaling}  
+Contagion Filter: {contagion_filter}
 """)
 
 st.markdown("---")
 
-# =====================================================
-# DATA DIAGNOSTICS
-# =====================================================
+# ======================================
+# SYSTEM ARCHITECTURE EXPLANATION
+# ======================================
 
-st.subheader("Data Diagnostics")
+st.subheader("System Architecture")
 
-colA, colB = st.columns(2)
+st.markdown("""
+**Layer 1 – Macro Regime Detection**  
+Autoencoder + Hidden Markov Model infer latent market states.
 
-colA.write("Regime Data:", "Available" if not regime_probs.empty else "Missing")
-colA.write("Volatility Data:", "Available" if not garch.empty else "Missing")
-colA.write("Contagion Data:", "Available" if not contagion.empty else "Missing")
+**Layer 2 – Volatility Modeling**  
+MS-GARCH estimates regime-dependent conditional variance.
 
-colB.write("VIX Data:", "Available" if not vix.empty else "Missing")
-colB.write("Market Data:", "Available" if not market_data.empty else "Missing")
+**Layer 3 – Contagion Monitoring**  
+Dynamic correlation structures detect systemic stress.
+
+**Layer 4 – Risk-Constrained Allocation**  
+Optimization engine allocates capital under CVaR and drawdown limits.
+
+Higher layers override lower ones.  
+Risk governance always dominates allocation logic.
+""")
 
 st.markdown("---")
 
-# =====================================================
-# NAVIGATION GUIDE
-# =====================================================
+# ======================================
+# SYSTEM HEALTH CHECK
+# ======================================
 
-st.subheader("Navigation")
+st.subheader("System Health Check")
+
+health_status = []
+
+if regime_probs.empty:
+    health_status.append("Regime layer missing")
+if garch.empty:
+    health_status.append("Volatility layer missing")
+if contagion.empty:
+    health_status.append("Contagion layer missing")
+
+if len(health_status) == 0:
+    st.success("All layers operational.")
+else:
+    for issue in health_status:
+        st.error(issue)
+
+st.markdown("---")
+
+# ======================================
+# USER NAVIGATION GUIDE
+# ======================================
+
+st.subheader("Navigation Guide")
 
 st.markdown("""
-Use sidebar pages to explore:
+Use the sidebar to explore:
 
-• **Macro Regime** → Regime heatmaps and crisis detection  
-• **Volatility** → MS-GARCH clustering vs VIX  
-• **Network Alpha** → Contagion networks and systemic risk  
-• **Portfolio Allocation** → Risk-constrained optimization  
-• **Conclusion** → Model limitations and governance review  
+- **Macro Regime** → View latent regime probability structure and crisis detection  
+- **Volatility** → Compare MS-GARCH forecasts vs market volatility  
+- **Network Alpha** → Inspect contagion dynamics and systemic stress  
+- **Portfolio Allocation** → Construct optimized portfolios under risk constraints  
 
-This system demonstrates hierarchical risk control under structural uncertainty.
+This dashboard demonstrates capital preservation under structural uncertainty.
 """)
 
-st.caption("Institutional-grade risk-aware capital allocation research framework.")
+st.markdown("---")
+
+st.caption("Designed for institutional-grade risk-aware capital allocation research.")
