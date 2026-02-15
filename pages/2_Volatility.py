@@ -13,10 +13,11 @@ fig = go.Figure()
 
 fig.add_trace(go.Scatter(
     x=garch.index,
-    y=garch["volatility"],
+    y=garch[garch.columns[0]],
     name="MS-GARCH Forecast",
     line=dict(color="blue")
 ))
+
 
 fig.add_trace(go.Scatter(
     x=vix.index,
