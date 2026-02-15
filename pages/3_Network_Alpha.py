@@ -2,60 +2,44 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
+import os
 
 st.set_page_config(layout="wide")
+
 st.title("Contagion Network & Diversification Diagnostics")
 
 # =====================================================
-# SAFE DATE HANDLING (PRODUCTION-GRADE)
+# LOAD DATA SAFELY
 # =====================================================
+
+data_path = "data"
+
+required_files = ["SPY.csv", "TLT.csv", "GLD.csv"]
+
+dataframes = []
+
+for file in required_files:
+    file_path = os.path.join(data_path, file)
+    if os.path.exists(file_path):
+        df = pd.read_csv(file_path, parse_dates=["Date"])
+        df.set_index("Date", inplace=True)
+        df = df[["Close"]].rename(columns={"Close": file.replace(".csv", "")})
+        dataframes.append(df)
+
+if len(dataframes) < 2:
+    st.error("Not enough ETF market data found. Ensure SPY, TLT, GLD are in /data.")
+    st.stop()
+
+# Merge properly
+assets = pd.concat(dataframes, axis=1).dropna()
+
+if assets.empty:
+    st.error("Merged asset dataset is empty.")
+    st.stop()
 
 assets = assets.sort_index()
 
-min_date = assets.index.min()
-max_date = assets.index.max()
-
-if pd.isna(min_date) or pd.isna(max_date):
-    st.error("Dataset has invalid datetime index.")
-    st.stop()
-
-# Convert safely to python date
-min_py = min_date.to_pydatetime().date()
-max_py = max_date.to_pydatetime().date()
-
-col1, col2 = st.columns(2)
-
-with col1:
-    start_date = st.date_input(
-        "Start Date",
-        value=min_py,
-        min_value=min_py,
-        max_value=max_py
-    )
-
-with col2:
-    end_date = st.date_input(
-        "End Date",
-        value=max_py,
-        min_value=min_py,
-        max_value=max_py
-    )
-
-if start_date >= end_date:
-    st.warning("Start date must be earlier than end date.")
-    st.stop()
-
-filtered = assets.loc[
-    (assets.index >= pd.to_datetime(start_date)) &
-    (assets.index <= pd.to_datetime(end_date))
-]
-
-if filtered.empty:
-    st.error("Selected date range contains no data.")
-    st.stop()
-
-assets = filtered.copy()
-copy()
 
 # =====================================================
 # CLEAN INDEX SAFELY
