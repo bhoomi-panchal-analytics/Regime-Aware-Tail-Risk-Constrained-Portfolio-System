@@ -1,0 +1,10 @@
+import pandas as pd
+
+# Use same index as macro_regime_df
+regime_probs_df = pd.DataFrame(
+    regime_probs,
+    index=macro_regime_df.index,
+    columns=[f"Regime_{i}" for i in range(regime_probs.shape[1])]
+)
+
+regime_probs_df.to_csv("data/regime_probabilities.csv")
