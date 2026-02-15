@@ -33,7 +33,16 @@ assets = assets.apply(pd.to_numeric, errors="coerce").dropna()
 # TIMELINE FILTER
 # ==========================
 
-start_date = st.date_input("Start Date", assets.index.min())
+min_date = assets.index.min()
+max_date = assets.index.max()
+
+if pd.isna(min_date) or pd.isna(max_date):
+    st.error("Invalid date index.")
+    st.stop()
+
+start_date = st.date_input("Start Date", min_date.date())
+end_date = st.date_input("End Date", max_date.date())
+
 end_date = st.date_input("End Date", assets.index.max())
 
 assets = assets.loc[
