@@ -3,47 +3,6 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 
-# =====================================================
-# SAFE DATE RANGE HANDLING
-# =====================================================
-
-if assets.index.dtype != "datetime64[ns]":
-    st.error("Index is not datetime. Check CSV structure.")
-    st.stop()
-
-if assets.index.isna().all():
-    st.error("All datetime values are invalid (NaT).")
-    st.stop()
-
-min_date = assets.index.min()
-max_date = assets.index.max()
-
-if pd.isna(min_date) or pd.isna(max_date):
-    st.error("Datetime bounds invalid after parsing.")
-    st.stop()
-
-# Convert to Python date objects explicitly
-min_date_py = min_date.to_pydatetime().date()
-max_date_py = max_date.to_pydatetime().date()
-
-start_date = st.date_input(
-    "Start Date",
-    value=min_date_py,
-    min_value=min_date_py,
-    max_value=max_date_py
-)
-
-end_date = st.date_input(
-    "End Date",
-    value=max_date_py,
-    min_value=min_date_py,
-    max_value=max_date_py
-)
-
-if start_date >= end_date:
-    st.warning("Start date must be earlier than end date.")
-    st.stop()
-
 st.set_page_config(layout="wide")
 st.title("Systemic Contagion & Network Diagnostics")
 
@@ -52,7 +11,6 @@ st.title("Systemic Contagion & Network Diagnostics")
 # =====================================================
 
 from utils.load_data import load_all
-
 data = load_all()
 
 if "market_data_template" not in data:
@@ -62,30 +20,27 @@ if "market_data_template" not in data:
 raw_df = data["market_data_template"].copy()
 
 # =====================================================
-# FORCE FIRST COLUMN AS DATE INDEX (DETERMINISTIC)
+# STRICT DATETIME PARSING
 # =====================================================
 
-df = raw_df.copy()
+df = raw_df.copy().reset_index()
 
-# Always reset index to avoid double parsing
-df = df.reset_index()
-
-# Assume first column contains dates
+# Try first column as datetime
 date_col = df.columns[0]
-
 df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
 
-# Drop invalid dates
-df = df.dropna(subset=[date_col])
+# If too many invalid dates, stop
+valid_ratio = df[date_col].notna().mean()
 
-if df.empty:
-    st.error("No valid datetime values found in first column.")
+if valid_ratio < 0.7:
+    st.error("First column does not contain valid datetime values.")
     st.stop()
 
+df = df.dropna(subset=[date_col])
 df = df.set_index(date_col)
 df = df.sort_index()
 
-# Keep only numeric columns
+# Keep numeric asset columns only
 df = df.apply(pd.to_numeric, errors="coerce")
 df = df.dropna(how="all")
 
@@ -96,17 +51,39 @@ if df.shape[1] < 3:
 assets = df.copy()
 
 # =====================================================
-# DATE RANGE FILTER (SAFE)
+# SAFE DATE RANGE FILTER
 # =====================================================
 
 min_date = assets.index.min()
 max_date = assets.index.max()
 
-start_date = st.date_input("Start Date", value=min_date)
-end_date = st.date_input("End Date", value=max_date)
+if pd.isna(min_date) or pd.isna(max_date):
+    st.error("Datetime bounds invalid.")
+    st.stop()
+
+min_date_py = min_date.to_pydatetime().date()
+max_date_py = max_date.to_pydatetime().date()
+
+col1, col2 = st.columns(2)
+
+with col1:
+    start_date = st.date_input(
+        "Start Date",
+        value=min_date_py,
+        min_value=min_date_py,
+        max_value=max_date_py
+    )
+
+with col2:
+    end_date = st.date_input(
+        "End Date",
+        value=max_date_py,
+        min_value=min_date_py,
+        max_value=max_date_py
+    )
 
 if start_date >= end_date:
-    st.warning("Invalid date range selected.")
+    st.warning("Start date must be before end date.")
     st.stop()
 
 filtered = assets.loc[
@@ -114,7 +91,7 @@ filtered = assets.loc[
     (assets.index <= pd.to_datetime(end_date))
 ]
 
-if len(filtered) < 100:
+if len(filtered) < 120:
     st.warning("Not enough data in selected range.")
     st.stop()
 
@@ -133,15 +110,15 @@ st.subheader("Rolling Contagion Index")
 window = st.slider("Rolling Window (days)", 30, 150, 60)
 
 if len(returns) <= window:
-    st.warning("Window too large.")
+    st.warning("Rolling window too large for selected range.")
     st.stop()
 
 density = []
 
 for i in range(window, len(returns)):
     corr = returns.iloc[i-window:i].corr().fillna(0)
-    upper = corr.abs().values[np.triu_indices_from(corr, k=1)]
-    density.append(np.mean(upper))
+    upper_vals = corr.abs().values[np.triu_indices_from(corr, k=1)]
+    density.append(np.mean(upper_vals))
 
 density_series = pd.Series(
     density,
@@ -157,7 +134,7 @@ fig_density = px.line(
 st.plotly_chart(fig_density, use_container_width=True)
 
 # =====================================================
-# CURRENT CORRELATION MATRIX
+# CURRENT CORRELATION HEATMAP
 # =====================================================
 
 st.subheader("Current Correlation Matrix")
@@ -176,7 +153,7 @@ fig_heat.update_layout(template="plotly_dark")
 st.plotly_chart(fig_heat, use_container_width=True)
 
 # =====================================================
-# SYSTEMIC CENTRALITY
+# CENTRALITY
 # =====================================================
 
 st.subheader("Systemic Centrality")
@@ -231,7 +208,7 @@ try:
     st.metric("Systemic Concentration Ratio", f"{concentration:.2f}")
 
 except:
-    st.warning("Eigenvalue computation unstable.")
+    st.warning("Eigenvalue calculation unstable.")
 
 # =====================================================
 # CORRELATION DISTRIBUTION
@@ -251,7 +228,7 @@ fig_hist = px.histogram(
 st.plotly_chart(fig_hist, use_container_width=True)
 
 # =====================================================
-# CONTAGION REGIME CLASSIFICATION
+# CONTAGION REGIME
 # =====================================================
 
 current_density = density_series.iloc[-1]
@@ -271,10 +248,9 @@ st.metric("Current Contagion Regime", regime)
 st.markdown("""
 ### Interpretation
 
-• Rising contagion index = tightening correlations  
-• High centrality = systemic dominance  
-• Large first eigenvalue = market behaving as single factor  
-• Low diversification ratio = fragile allocation  
+• Rising contagion index → tightening correlations  
+• Large eigenvalue concentration → systemic dominance  
+• Falling diversification ratio → fragile allocation  
 
-Diversification fails when correlations compress.
+Contagion precedes drawdowns.
 """)
