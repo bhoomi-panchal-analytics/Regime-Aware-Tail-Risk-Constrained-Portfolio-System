@@ -7,18 +7,55 @@ st.set_page_config(layout="wide")
 st.title("Contagion Network & Diversification Diagnostics")
 
 # =====================================================
-# LOAD DATA
+# SAFE DATE HANDLING (PRODUCTION-GRADE)
 # =====================================================
 
-from utils.load_data import load_all
+assets = assets.sort_index()
 
-data = load_all()
+min_date = assets.index.min()
+max_date = assets.index.max()
 
-if "market_data_template" not in data:
-    st.error("market_data_template.csv missing in /data folder.")
+if pd.isna(min_date) or pd.isna(max_date):
+    st.error("Dataset has invalid datetime index.")
     st.stop()
 
-assets = data["market_data_template"].copy()
+# Convert safely to python date
+min_py = min_date.to_pydatetime().date()
+max_py = max_date.to_pydatetime().date()
+
+col1, col2 = st.columns(2)
+
+with col1:
+    start_date = st.date_input(
+        "Start Date",
+        value=min_py,
+        min_value=min_py,
+        max_value=max_py
+    )
+
+with col2:
+    end_date = st.date_input(
+        "End Date",
+        value=max_py,
+        min_value=min_py,
+        max_value=max_py
+    )
+
+if start_date >= end_date:
+    st.warning("Start date must be earlier than end date.")
+    st.stop()
+
+filtered = assets.loc[
+    (assets.index >= pd.to_datetime(start_date)) &
+    (assets.index <= pd.to_datetime(end_date))
+]
+
+if filtered.empty:
+    st.error("Selected date range contains no data.")
+    st.stop()
+
+assets = filtered.copy()
+copy()
 
 # =====================================================
 # CLEAN INDEX SAFELY
