@@ -6,10 +6,10 @@ import plotly.graph_objects as go
 from utils.load_data import load_all
 
 st.set_page_config(layout="wide")
-st.title("MS-GARCH vs VIX — Advanced Volatility Diagnostics")
+st.title("MS-GARCH vs VIX — Institutional Volatility Diagnostics")
 
 # =====================================================
-# LOAD DATA SAFELY
+# LOAD DATA
 # =====================================================
 
 data = load_all()
@@ -17,9 +17,9 @@ data = load_all()
 garch = None
 vix = None
 
-# Detect GARCH (low magnitude volatility)
 for key, df in data.items():
     if isinstance(df, pd.DataFrame) and df.shape[1] >= 1:
+
         numeric = df.apply(pd.to_numeric, errors="coerce").dropna()
         if numeric.empty:
             continue
@@ -34,35 +34,39 @@ for key, df in data.items():
             vix = numeric
 
 if garch is None or vix is None:
-    st.error("Unable to auto-detect MS-GARCH or VIX dataset.")
+    st.error("Could not detect both MS-GARCH and VIX datasets.")
     st.stop()
 
 # =====================================================
-# CLEAN & ALIGN
+# CLEAN INDEX
 # =====================================================
 
 garch.index = pd.to_datetime(garch.index, errors="coerce")
 vix.index = pd.to_datetime(vix.index, errors="coerce")
 
-garch = garch[~garch.index.isna()]
-vix = vix[~vix.index.isna()]
+garch = garch[~garch.index.isna()].sort_index()
+vix = vix[~vix.index.isna()].sort_index()
 
-garch = garch.sort_index()
-vix = vix.sort_index()
+# =====================================================
+# RESAMPLE TO BUSINESS DAILY & FILL
+# =====================================================
 
-combined = garch.join(vix, how="inner")
+garch = garch.resample("B").mean().ffill()
+vix = vix.resample("B").mean().ffill()
+
+# ALIGN
+combined = pd.concat([garch, vix], axis=1)
+combined = combined.ffill().dropna()
 
 if combined.empty:
-    st.error("No overlapping dates between MS-GARCH and VIX.")
+    st.error("After synchronization, dataset is empty.")
     st.stop()
-
-combined = combined.dropna()
 
 garch_col = combined.columns[0]
 vix_col = combined.columns[-1]
 
 # =====================================================
-# TIMELINE FILTER
+# DATE FILTER
 # =====================================================
 
 min_date = combined.index.min()
@@ -76,17 +80,17 @@ with col1:
 with col2:
     end_date = st.date_input("End Date", max_date.date())
 
-mask = (combined.index >= pd.to_datetime(start_date)) & \
-       (combined.index <= pd.to_datetime(end_date))
-
-combined = combined.loc[mask]
+combined = combined.loc[
+    (combined.index >= pd.to_datetime(start_date)) &
+    (combined.index <= pd.to_datetime(end_date))
+]
 
 if combined.empty:
-    st.warning("No data in selected period.")
+    st.warning("No data in selected date range.")
     st.stop()
 
 # =====================================================
-# 1️⃣ MAIN VOLATILITY COMPARISON
+# MAIN VOLATILITY COMPARISON
 # =====================================================
 
 st.subheader("Forecast vs Implied Volatility")
@@ -118,10 +122,25 @@ fig.update_layout(template="plotly_dark")
 st.plotly_chart(fig, use_container_width=True)
 
 # =====================================================
-# 2️⃣ VOLATILITY CLUSTERING SCATTER
+# VOLATILITY RISK PREMIUM
 # =====================================================
 
-st.subheader("Volatility Clustering (Lag Test)")
+st.subheader("Volatility Risk Premium (VIX − Forecast)")
+
+spread = combined[vix_col] - combined[garch_col]
+
+fig_spread = px.line(
+    spread,
+    template="plotly_dark"
+)
+
+st.plotly_chart(fig_spread, use_container_width=True)
+
+# =====================================================
+# CLUSTERING CHECK
+# =====================================================
+
+st.subheader("Volatility Clustering Test")
 
 vol = combined[garch_col]
 lag = vol.shift(1)
@@ -140,65 +159,19 @@ fig_cluster = px.scatter(
 st.plotly_chart(fig_cluster, use_container_width=True)
 
 # =====================================================
-# 3️⃣ ROLLING VOL COMPARISON
+# PERSISTENCE METRIC
 # =====================================================
 
-st.subheader("Rolling 30-Day Volatility")
+st.subheader("Volatility Persistence")
 
-rolling_garch = combined[garch_col].rolling(30).mean()
-rolling_vix = combined[vix_col].rolling(30).mean()
-
-fig_roll = go.Figure()
-fig_roll.add_trace(go.Scatter(x=combined.index, y=rolling_garch,
-                              name="Rolling GARCH"))
-fig_roll.add_trace(go.Scatter(x=combined.index, y=rolling_vix,
-                              name="Rolling VIX"))
-
-fig_roll.update_layout(template="plotly_dark")
-st.plotly_chart(fig_roll, use_container_width=True)
+persistence = vol.autocorr(lag=1)
+st.metric("Lag-1 Autocorrelation", f"{persistence:.4f}")
 
 # =====================================================
-# 4️⃣ VOLATILITY RISK PREMIUM
+# EXTREME SPIKES
 # =====================================================
 
-st.subheader("Volatility Risk Premium (VIX − Forecast)")
-
-spread = combined[vix_col] - combined[garch_col]
-
-fig_spread = px.line(
-    spread,
-    template="plotly_dark"
-)
-
-st.plotly_chart(fig_spread, use_container_width=True)
-
-# =====================================================
-# 5️⃣ REGIME CLASSIFICATION
-# =====================================================
-
-st.subheader("Volatility Regime Distribution")
-
-low = vol.quantile(0.25)
-high = vol.quantile(0.75)
-
-regime = pd.cut(
-    vol,
-    bins=[-np.inf, low, high, np.inf],
-    labels=["Low", "Medium", "High"]
-)
-
-fig_regime = px.histogram(
-    regime,
-    template="plotly_dark"
-)
-
-st.plotly_chart(fig_regime, use_container_width=True)
-
-# =====================================================
-# 6️⃣ EXTREME SPIKES
-# =====================================================
-
-st.subheader("Top 5% Volatility Events")
+st.subheader("Extreme Volatility Events (Top 5%)")
 
 threshold = vol.quantile(0.95)
 extreme = vol[vol > threshold]
@@ -211,57 +184,14 @@ fig_extreme = px.scatter(
 
 st.plotly_chart(fig_extreme, use_container_width=True)
 
-# =====================================================
-# 7️⃣ PERSISTENCE METRIC
-# =====================================================
-
-st.subheader("Volatility Persistence")
-
-persistence = vol.autocorr(lag=1)
-st.metric("Lag-1 Autocorrelation", f"{persistence:.4f}")
-
-# =====================================================
-# 8️⃣ DISTRIBUTION ANALYSIS
-# =====================================================
-
-st.subheader("Volatility Distribution")
-
-fig_dist = px.histogram(
-    vol,
-    nbins=50,
-    template="plotly_dark"
-)
-
-st.plotly_chart(fig_dist, use_container_width=True)
-
-# =====================================================
-# 9️⃣ VOL ACCELERATION
-# =====================================================
-
-st.subheader("Volatility Acceleration")
-
-acceleration = vol.diff()
-
-fig_acc = px.line(
-    acceleration,
-    template="plotly_dark"
-)
-
-st.plotly_chart(fig_acc, use_container_width=True)
-
-# =====================================================
-# 🔟 SUMMARY INTERPRETATION
-# =====================================================
-
 st.markdown("""
-### Interpretation Guide
+### Interpretation
 
+• Resampling ensures synchronization  
 • Clustering confirms heteroskedasticity  
-• Spread measures volatility risk premium  
-• Persistence shows regime memory  
+• Spread reflects volatility risk premium  
+• Persistence indicates regime memory  
 • Extreme spikes align with systemic crises  
-• Rolling trends confirm model responsiveness  
 
-MS-GARCH adapts slowly.  
-VIX anticipates forward stress.
+This is now production-aligned volatility diagnostics.
 """)
