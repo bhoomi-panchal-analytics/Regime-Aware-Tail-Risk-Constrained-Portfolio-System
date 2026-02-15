@@ -43,7 +43,7 @@ if pd.isna(min_date) or pd.isna(max_date):
 start_date = st.date_input("Start Date", min_date.date())
 end_date = st.date_input("End Date", max_date.date())
 
-end_date = st.date_input("End Date", assets.index.max())
+
 
 assets = assets.loc[
     (assets.index >= pd.to_datetime(start_date)) &
