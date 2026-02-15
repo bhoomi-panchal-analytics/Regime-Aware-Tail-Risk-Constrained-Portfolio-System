@@ -9,19 +9,31 @@ data = load_all()
 garch = data["garch"]
 vix = data["vix"]
 
+# --- SAFETY CHECKS ---
+if garch.empty:
+    st.error("GARCH data missing or empty.")
+    st.stop()
+
+if vix.empty:
+    st.error("VIX data missing or empty.")
+    st.stop()
+
+# Automatically select first column (no hardcoding)
+garch_col = garch.columns[0]
+vix_col = vix.columns[0]
+
 fig = go.Figure()
 
 fig.add_trace(go.Scatter(
     x=garch.index,
-    y=garch[garch.columns[0]],
+    y=garch[garch_col],
     name="MS-GARCH Forecast",
     line=dict(color="blue")
 ))
 
-
 fig.add_trace(go.Scatter(
     x=vix.index,
-    y=vix["VIX"],
+    y=vix[vix_col],
     name="VIX",
     line=dict(color="red")
 ))
