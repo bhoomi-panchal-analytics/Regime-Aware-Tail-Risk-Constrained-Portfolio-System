@@ -4,159 +4,197 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from utils.load_data import load_all
-from scipy.optimize import minimize
 
 st.set_page_config(layout="wide")
-st.title("Portfolio Allocation & Capital Preservation Engine")
+st.title("Dynamic Portfolio Allocation & Capital Preservation Engine")
 
-# ====================================
-# LOAD DATA
-# ====================================
+# ==========================
+# Load Data
+# ==========================
 
 data = load_all()
 
-if "market" not in data or data["macro"].empty:
-    st.warning("Market return data missing.")
+assets = data.get("market_data", pd.DataFrame())
+
+if assets.empty:
+    st.error("Market data missing.")
     st.stop()
 
-# For demo assume you have market_prices.csv with asset returns
-try:
-    market = pd.read_csv("data/market_prices.csv", index_col=0, parse_dates=True)
-except:
-    st.warning("market_prices.csv missing.")
-    st.stop()
+assets = assets.apply(pd.to_numeric, errors="coerce").dropna()
 
-returns = market.pct_change().dropna()
+returns = assets.pct_change().dropna()
 
-assets = list(returns.columns)
+# ==========================
+# Investor Profile (Sidebar)
+# ==========================
+
+st.sidebar.header("Investor Profile")
+
+capital = st.sidebar.number_input("Capital", value=100000.0)
+risk_aversion = st.sidebar.slider("Risk Aversion (0 = Aggressive, 1 = Defensive)", 0.0, 1.0, 0.5)
+rebalance_freq = st.sidebar.selectbox("Rebalance Frequency", ["Monthly", "Quarterly", "Yearly"])
+
+# ==========================
+# Asset Selection
+# ==========================
 
 selected_assets = st.multiselect(
     "Select Assets",
-    assets,
-    default=assets[:4]
+    options=returns.columns,
+    default=returns.columns[:4]
 )
 
 if len(selected_assets) < 2:
-    st.warning("Select at least two assets.")
+    st.warning("Select at least 2 assets.")
     st.stop()
 
 returns = returns[selected_assets]
 
-# ====================================
-# OPTIMIZATION: MIN VARIANCE
-# ====================================
+# ==========================
+# Basic Mean-Variance (Closed Form)
+# ==========================
 
-cov_matrix = returns.cov()
 mean_returns = returns.mean()
+cov_matrix = returns.cov()
 
-def portfolio_vol(weights):
-    return np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
+inv_cov = np.linalg.pinv(cov_matrix.values)
+ones = np.ones(len(mean_returns))
 
-constraints = ({'type': 'eq', 'fun': lambda w: np.sum(w) - 1})
-bounds = tuple((0,1) for _ in selected_assets)
+# Tangency portfolio weights
+weights = inv_cov @ mean_returns.values
+weights = weights / np.sum(weights)
 
-init_guess = np.ones(len(selected_assets)) / len(selected_assets)
+# Risk scaling based on risk_aversion
+weights = weights * (1 - risk_aversion)
+weights = weights / np.sum(weights)
 
-opt = minimize(portfolio_vol, init_guess,
-               method='SLSQP',
-               bounds=bounds,
-               constraints=constraints)
+weights_df = pd.DataFrame(weights, index=selected_assets, columns=["Weight"])
 
-weights = opt.x
+# ==========================
+# Portfolio Metrics
+# ==========================
 
-weights_df = pd.DataFrame({
-    "Asset": selected_assets,
-    "Weight": weights
-})
+port_return = np.dot(weights, mean_returns)
+port_vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
+sharpe = port_return / port_vol
 
-st.subheader("Optimized Allocation (Min Variance)")
+st.subheader("Optimal Weights")
 st.dataframe(weights_df)
 
-# ====================================
-# PIE CHART
-# ====================================
+st.subheader("Portfolio Metrics")
 
-fig_pie = px.pie(weights_df,
-                 names="Asset",
-                 values="Weight",
-                 title="Capital Allocation Breakdown")
+col1, col2, col3 = st.columns(3)
+col1.metric("Expected Return", f"{port_return:.4f}")
+col2.metric("Volatility", f"{port_vol:.4f}")
+col3.metric("Sharpe Ratio", f"{sharpe:.4f}")
 
-st.plotly_chart(fig_pie, use_container_width=True)
+# ==========================
+# Risk Contribution
+# ==========================
 
-# ====================================
-# RISK CONTRIBUTION
-# ====================================
+marginal_risk = cov_matrix @ weights
+risk_contribution = weights * marginal_risk / port_vol
 
-portfolio_variance = portfolio_vol(weights)**2
-marginal_contrib = np.dot(cov_matrix, weights)
-risk_contrib = weights * marginal_contrib / portfolio_variance
+risk_df = pd.DataFrame(risk_contribution, index=selected_assets, columns=["Risk Contribution"])
 
-risk_df = pd.DataFrame({
-    "Asset": selected_assets,
-    "Risk Contribution": risk_contrib
-})
+fig_rc = px.bar(risk_df, title="Risk Contribution by Asset", template="plotly_dark")
+st.plotly_chart(fig_rc, use_container_width=True)
 
-fig_bar = px.bar(risk_df,
-                 x="Asset",
-                 y="Risk Contribution",
-                 title="Risk Contribution by Asset")
+# ==========================
+# Portfolio Growth Simulation
+# ==========================
 
-st.plotly_chart(fig_bar, use_container_width=True)
+portfolio_returns = returns @ weights
+portfolio_growth = (1 + portfolio_returns).cumprod()
 
-# ====================================
-# DIVERSIFICATION RATIO
-# ====================================
+fig_growth = px.line(
+    portfolio_growth,
+    title="Simulated Portfolio Growth",
+    template="plotly_dark"
+)
 
-weighted_vol = np.dot(weights, np.sqrt(np.diag(cov_matrix)))
-portfolio_volatility = portfolio_vol(weights)
-div_ratio = weighted_vol / portfolio_volatility
+st.plotly_chart(fig_growth, use_container_width=True)
 
-st.metric("Diversification Ratio", round(div_ratio, 2))
+# ==========================
+# Drawdown Analysis
+# ==========================
 
-# ====================================
-# HISTORICAL DRAWDOWN
-# ====================================
+rolling_max = portfolio_growth.cummax()
+drawdown = (portfolio_growth - rolling_max) / rolling_max
 
-portfolio_returns = returns.dot(weights)
-cum = (1 + portfolio_returns).cumprod()
-peak = cum.cummax()
-drawdown = (cum - peak) / peak
-
-fig_dd = px.line(drawdown,
-                 title="Historical Drawdown")
-
+fig_dd = px.line(drawdown, title="Drawdown Profile", template="plotly_dark")
 st.plotly_chart(fig_dd, use_container_width=True)
 
-# ====================================
-# CVaR
-# ====================================
+# ==========================
+# Diversification Ratio
+# ==========================
 
-cvar = portfolio_returns.quantile(0.05)
+weighted_vol = np.sum(weights * np.sqrt(np.diag(cov_matrix)))
+div_ratio = weighted_vol / port_vol
 
-st.metric("Historical CVaR (5%)", round(cvar, 4))
+st.subheader("Diversification Ratio")
+st.metric("Diversification Ratio", f"{div_ratio:.4f}")
 
-# ====================================
-# PROBABILISTIC NEAR-FUTURE SIMULATION
-# ====================================
+# ==========================
+# Correlation Heatmap
+# ==========================
 
-simulations = []
-for _ in range(1000):
-    sim = np.random.multivariate_normal(mean_returns, cov_matrix)
-    simulations.append(np.dot(weights, sim))
+fig_corr = px.imshow(
+    returns.corr(),
+    color_continuous_scale="RdBu",
+    title="Correlation Matrix",
+    template="plotly_dark"
+)
 
-simulations = np.array(simulations)
+st.plotly_chart(fig_corr, use_container_width=True)
 
-fig_sim = px.histogram(simulations,
-                       nbins=40,
-                       title="Probabilistic 1-Period Forward Return Distribution")
+# ==========================
+# Rolling Volatility
+# ==========================
 
-st.plotly_chart(fig_sim, use_container_width=True)
+rolling_vol = portfolio_returns.rolling(30).std()
+
+fig_rollvol = px.line(
+    rolling_vol,
+    title="Rolling 30-Day Volatility",
+    template="plotly_dark"
+)
+
+st.plotly_chart(fig_rollvol, use_container_width=True)
+
+# ==========================
+# Fundamental Proxy (Return vs Risk Scatter)
+# ==========================
+
+scatter_df = pd.DataFrame({
+    "Return": mean_returns,
+    "Volatility": np.sqrt(np.diag(cov_matrix))
+})
+
+fig_scatter = px.scatter(
+    scatter_df,
+    x="Volatility",
+    y="Return",
+    text=scatter_df.index,
+    title="Risk vs Return Profile",
+    template="plotly_dark"
+)
+
+st.plotly_chart(fig_scatter, use_container_width=True)
+
+# ==========================
+# Interpretation
+# ==========================
 
 st.markdown("""
-### Interpretation
-- Allocation minimizes variance under constraints.
-- Risk contribution shows which asset dominates portfolio volatility.
-- Diversification ratio > 1.5 indicates meaningful diversification.
-- CVaR measures left-tail exposure.
-- Forward simulation reflects distribution, not prediction.
+### Capital Preservation Interpretation
+
+• Higher risk_aversion reduces exposure scaling  
+• Diversification ratio measures structural robustness  
+• Risk contribution highlights concentration risk  
+• Drawdown profile evaluates survival capacity  
+• Rolling volatility confirms clustering  
+
+This page demonstrates optimization under covariance structure,
+not return speculation.
 """)
