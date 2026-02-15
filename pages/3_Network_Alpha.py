@@ -2,79 +2,59 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
 
 st.set_page_config(layout="wide")
 st.title("Systemic Contagion & Network Diagnostics")
 
 # ======================================================
-# LOAD DATA SAFELY
+# LOAD DATA
 # ======================================================
 
 from utils.load_data import load_all
 data = load_all()
 
 if "market_data_template" not in data:
-    st.error("market_data_template.csv missing.")
+    st.error("market_data_template.csv not found.")
     st.stop()
 
-raw = data["market_data_template"].copy()
+df = data["market_data_template"].copy()
 
 # ======================================================
-# SAFE DATETIME PROCESSING
+# SAFE CLEANING
 # ======================================================
 
-if "Date" in raw.columns:
-    raw["Date"] = pd.to_datetime(raw["Date"], errors="coerce")
-    raw = raw.dropna(subset=["Date"])
-    raw = raw.set_index("Date")
+if "Date" in df.columns:
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df = df.dropna(subset=["Date"])
+    df = df.set_index("Date")
 
-raw.index = pd.to_datetime(raw.index, errors="coerce")
-raw = raw[~raw.index.isna()]
-raw = raw.sort_index()
+df.index = pd.to_datetime(df.index, errors="coerce")
+df = df[~df.index.isna()]
+df = df.sort_index()
 
-if raw.empty:
-    st.error("Dataset empty after datetime cleaning.")
-    st.stop()
+# Convert to numeric
+df = df.apply(pd.to_numeric, errors="coerce")
 
-# ======================================================
-# NUMERIC CLEANING
-# ======================================================
+# Drop columns with too many NaN
+df = df.loc[:, df.isna().mean() < 0.5]
 
-raw = raw.apply(pd.to_numeric, errors="coerce")
-
-# Drop columns with more than 50% NaN
-valid_cols = raw.columns[raw.isna().mean() < 0.5]
-df = raw[valid_cols].copy()
+# Forward fill then zero fill
+df = df.ffill().fillna(0)
 
 if df.shape[1] < 2:
-    st.error("Need at least two valid asset columns.")
+    st.error("Not enough valid asset columns.")
     st.stop()
 
-df = df.fillna(method="ffill").fillna(0)
+if len(df) < 100:
+    st.warning("Small dataset. Results may be unstable.")
+
+st.success("Dataset loaded and cleaned successfully.")
 
 # ======================================================
-# DATE RANGE (NO BOUND ERRORS)
+# ROLLING WINDOW
 # ======================================================
 
-min_date = df.index.min()
-max_date = df.index.max()
-
-if pd.isna(min_date) or pd.isna(max_date):
-    st.error("Invalid date bounds.")
-    st.stop()
-
-start_date = st.date_input("Start Date", min_date.date())
-end_date = st.date_input("End Date", max_date.date())
-
-if start_date >= end_date:
-    st.error("Invalid date range.")
-    st.stop()
-
-filtered = df.loc[str(start_date):str(end_date)]
-
-if len(filtered) < 60:
-    st.warning("Short sample period. Results may be unstable.")
+window = st.slider("Rolling Window (days)", 30, 180, 60)
 
 # ======================================================
 # 1️⃣ Rolling Contagion Index
@@ -82,42 +62,40 @@ if len(filtered) < 60:
 
 st.subheader("1. Rolling Contagion Index")
 
-window = st.slider("Rolling Window", 30, 150, 60)
-
 rolling_density = []
 
-for i in range(window, len(filtered)):
-    corr = filtered.iloc[i-window:i].corr()
+for i in range(window, len(df)):
+    corr = df.iloc[i-window:i].corr()
     upper = corr.values[np.triu_indices_from(corr, k=1)]
     rolling_density.append(np.nanmean(np.abs(upper)))
 
 rolling_density = pd.Series(
     rolling_density,
-    index=filtered.index[window:]
+    index=df.index[window:]
 )
 
 fig1 = px.line(
     rolling_density,
     template="plotly_dark",
-    title="Average Absolute Correlation (Contagion Proxy)"
+    title="Average Absolute Correlation Over Time"
 )
 
 st.plotly_chart(fig1, use_container_width=True)
 
 # ======================================================
-# 2️⃣ Correlation Heatmap
+# 2️⃣ Current Correlation Heatmap
 # ======================================================
 
-st.subheader("2. Correlation Heatmap (Current Window)")
+st.subheader("2. Current Correlation Structure")
 
-corr_matrix = filtered.iloc[-window:].corr().fillna(0)
+corr_matrix = df.iloc[-window:].corr().fillna(0)
 
 fig2 = px.imshow(
     corr_matrix,
     zmin=-1,
     zmax=1,
     color_continuous_scale="RdBu",
-    text_auto=True
+    text_auto=False
 )
 
 fig2.update_layout(template="plotly_dark")
@@ -133,7 +111,7 @@ upper_vals = corr_matrix.values[np.triu_indices_from(corr_matrix, k=1)]
 
 fig3 = px.histogram(
     upper_vals,
-    nbins=25,
+    nbins=30,
     template="plotly_dark",
     title="Pairwise Correlation Histogram"
 )
@@ -162,8 +140,8 @@ st.plotly_chart(fig4, use_container_width=True)
 
 st.subheader("5. Diversification Ratio")
 
-vol = filtered.std()
-cov = filtered.cov()
+vol = df.std()
+cov = df.cov()
 
 weights = np.ones(len(vol)) / len(vol)
 
@@ -199,23 +177,23 @@ except:
     st.warning("Eigen decomposition unstable.")
 
 # ======================================================
-# 7️⃣ Rolling Volatility Overlay
+# 7️⃣ Rolling Volatility
 # ======================================================
 
-st.subheader("7. Average Rolling Volatility")
+st.subheader("7. Cross-Asset Rolling Volatility")
 
-rolling_vol = filtered.rolling(window).std().mean(axis=1)
+rolling_vol = df.rolling(window).std().mean(axis=1)
 
 fig7 = px.line(
     rolling_vol,
     template="plotly_dark",
-    title="Cross-Asset Rolling Volatility"
+    title="Average Rolling Volatility"
 )
 
 st.plotly_chart(fig7, use_container_width=True)
 
 # ======================================================
-# 8️⃣ Network Stress Classification
+# 8️⃣ Regime Classification
 # ======================================================
 
 st.subheader("8. Network Stress Regime")
@@ -232,13 +210,13 @@ if not rolling_density.empty:
     else:
         regime = "Moderate Contagion"
 
-    st.metric("Current Regime", regime)
+    st.metric("Current Network Regime", regime)
 
 st.markdown("""
 ### Interpretation
 
-• Rising contagion index → diversification breakdown  
-• Dominant eigenvalue spike → systemic factor dominance  
-• Falling diversification ratio → hidden fragility  
-• Volatility + correlation rising together → crisis regime
+• Rising contagion → diversification collapse  
+• Large first eigenvalue → dominant systemic factor  
+• Falling diversification ratio → hidden concentration  
+• Volatility + correlation spike → crisis regime
 """)
